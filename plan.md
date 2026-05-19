@@ -15,7 +15,7 @@
     - `tickets`: PNR and ticket management.
     - `core`: Shared utilities, middleware, and base models.
 
-## 2. Authentication Module
+## 2. Authentication Module [DONE]
 - Implement custom `User` model with `role` (Customer, Agent, Admin).
 - Setup `djangorestframework-simplejwt` for token-based authentication.
 - API Endpoints:
@@ -80,11 +80,11 @@
 - [x] Setup `core` app: Base models (UUID, timestamps), centralized exception handling, and standard response middleware.
 - [x] Environment configuration (`.env.example`).
 
-### Day 2: Authentication & Role Management
-- [ ] Implement Custom User model with roles: `CUSTOMER`, `AGENT`, `ADMIN`.
-- [ ] Integrate `SimpleJWT` for authentication.
-- [ ] Build Auth APIs: Register, Login, Refresh, and Profile.
-- [ ] Implement role-based permission classes.
+### Day 2: Authentication & Role Management [DONE]
+- [x] Implement Custom User model with roles: `CUSTOMER`, `AGENT`, `ADMIN`.
+- [x] Integrate `SimpleJWT` for authentication.
+- [x] Build Auth APIs: Register, Login, Refresh, and Profile.
+- [x] Implement role-based permission classes.
 
 ### Day 3: Flight Search & Provider Integration
 - [ ] Build `ProviderService` to wrap external Flight API.

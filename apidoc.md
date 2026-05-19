@@ -31,7 +31,7 @@ Connectivity (Staging Urls and Credentials)
 This web services can be accessed by both JSON services. All the method accepts only post data and will return JSON format data. Please use below URLs for development purpose.
 
 Service URLs(JSON)
-Domain/airlinehost/AirAPIService.svc/JSONService**Domain.in/tradehost/TradeAPIService.svc/JSONService
+https://uat.flyshop.in/airlinehost/AirAPIService.svc/JSONService**Domain.in/tradehost/TradeAPIService.svc/JSONService
 
 Credentials
 The Credentials will be shared through E-mail.
@@ -60,7 +60,7 @@ TEST/ASDFASFA UBGDMA 18 Jan 2023 18 Jan 2023 G8 575 301 BOM DEL 27 Feb 2023 27 F
 
 API ENDPOINTS:
 
-1. http://domain/airlinehost/AirAPIService.svc/JSONService/Air_SectorAvailabilityPI
+1. https://uat.flyshop.in/airlinehost/AirAPIService.svc/JSONService/Air_SectorAvailabilityPI
 If you are purchasing only Series Fares, you need to call Air_SectorAvailability API and restrict sending the search requests to our API using the sectors received from this API.
 
 If you are purchasing FD/Regular fares, do not restrict search requests to send to our API using the sectors received from this API. If required, you can get the list of sectors offline and restrict the search requests to send to the API.
@@ -139,7 +139,7 @@ curl --location "http://domain.in/airlinehost/AirAPIService.svc/JSONService/Air_
 }'
 
 
-2. curl --location "http://domain.in/airlinehost/AirAPIService.svc/JSONService/Air_Search' \
+2. curl --location "https://uat.flyshop.in/airlinehost/AirAPIService.svc/JSONService/Air_Search' \
 --data '{
     "Auth_Header": {
         "UserId": "XXXXXXXXXXXX",

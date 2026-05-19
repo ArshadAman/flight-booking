@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'rest_framework_simplejwt',
+    'drf_spectacular',
     
     # Local apps
     'core',
@@ -128,6 +129,10 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Custom User Model
+AUTH_USER_MODEL = 'accounts.User'
+
+
 # REST Framework Settings
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
@@ -140,6 +145,16 @@ REST_FRAMEWORK = {
         'core.renderers.CustomRenderer',
     ],
     'EXCEPTION_HANDLER': 'core.exceptions.custom_exception_handler',
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+# Swagger / OpenAPI Settings
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Flight Booking System API',
+    'DESCRIPTION': 'MVP Flight Booking System B2B + B2C Backend Documentation',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
 }
 
 # SimpleJWT Settings
@@ -163,3 +178,10 @@ CELERY_TIMEZONE = TIME_ZONE
 
 # CORS Settings
 CORS_ALLOW_ALL_ORIGINS = True # Change in production
+
+# FlyShop API Credentials
+FLIGHT_API_BASE_URL = os.getenv('FLIGHT_API_BASE_URL', 'http://uat.flyshop.in/')
+FLIGHT_API_USER_ID = os.getenv('FLIGHT_API_USER_ID', 'traveldealuat')
+FLIGHT_API_PASSWORD = os.getenv('FLIGHT_API_PASSWORD', '875BB7BD366C2BA7305E72805ACF34B0A354E513')
+FLIGHT_API_IP_ADDRESS = os.getenv('FLIGHT_API_IP_ADDRESS', '3.68.64.88')
+FLIGHT_API_IMEI = os.getenv('FLIGHT_API_IMEI', '2363555347456789')
