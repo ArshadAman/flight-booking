@@ -1,7 +1,12 @@
 from rest_framework import views, status, permissions
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema
-from .serializers import FlightSearchRequestSerializer
+from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample
+from .serializers import (
+    FlightSearchRequestSerializer,
+    FlightRevalidateRequestSerializer,
+    SearchResponseSerializer,
+    RevalidateResponseSerializer,
+)
 from .services import ProviderService
 
 class FlightSearchView(views.APIView):
@@ -15,6 +20,8 @@ class FlightSearchView(views.APIView):
         request=FlightSearchRequestSerializer,
         summary="Search Flights",
         description="Searches for flights matching origin, destination, travel dates, passenger counts, and travel class. Supports both one-way and round-trip searches."
+        ,
+        responses={200: OpenApiResponse(response=SearchResponseSerializer)}
     )
     def post(self, request, *args, **kwargs):
         serializer = FlightSearchRequestSerializer(data=request.data)
@@ -25,5 +32,30 @@ class FlightSearchView(views.APIView):
         
         return Response(
             data=search_results,
+            status=status.HTTP_200_OK
+        )
+
+
+class FlightRevalidateView(views.APIView):
+    """
+    Revalidates a selected flight and fare before booking.
+    """
+    permission_classes = (permissions.AllowAny,)
+
+    @extend_schema(
+        request=FlightRevalidateRequestSerializer,
+        summary="Revalidate Flight Fare",
+        description="Checks whether a selected flight and fare are still valid before booking."
+        ,
+        responses={200: OpenApiResponse(response=RevalidateResponseSerializer)}
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = FlightRevalidateRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        revalidate_result = ProviderService.reprice_flight(serializer.validated_data)
+
+        return Response(
+            data=revalidate_result,
             status=status.HTTP_200_OK
         )

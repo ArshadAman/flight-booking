@@ -1,0 +1,771 @@
+openapi: 3.0.3
+info:
+  title: Flight Booking System API
+  version: 1.0.0
+  description: MVP Flight Booking System B2B + B2C Backend Documentation
+paths:
+  /api/v1/auth/login/:
+    post:
+      operationId: api_v1_auth_login_create
+      description: |-
+        Takes a set of user credentials and returns an access and refresh JSON web
+        token pair to prove the authentication of those credentials.
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPairRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPairRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPairRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenObtainPair'
+          description: ''
+  /api/v1/auth/profile/:
+    get:
+      operationId: api_v1_auth_profile_retrieve
+      tags:
+      - api
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    put:
+      operationId: api_v1_auth_profile_update
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    patch:
+      operationId: api_v1_auth_profile_partial_update
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/v1/auth/refresh/:
+    post:
+      operationId: api_v1_auth_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/v1/auth/register/:
+    post:
+      operationId: api_v1_auth_register_create
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Register'
+          description: ''
+  /api/v1/flights/revalidate/:
+    post:
+      operationId: api_v1_flights_revalidate_create
+      description: Checks whether a selected flight and fare are still valid before
+        booking.
+      summary: Revalidate Flight Fare
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlightRevalidateRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FlightRevalidateRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FlightRevalidateRequestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevalidateResponse'
+          description: ''
+  /api/v1/flights/search/:
+    post:
+      operationId: api_v1_flights_search_create
+      description: Searches for flights matching origin, destination, travel dates,
+        passenger counts, and travel class. Supports both one-way and round-trip searches.
+      summary: Search Flights
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlightSearchRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/FlightSearchRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FlightSearchRequestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+          description: ''
+components:
+  schemas:
+    Baggage:
+      type: object
+      properties:
+        check_in:
+          type: string
+          nullable: true
+          maxLength: 64
+        hand:
+          type: string
+          nullable: true
+          maxLength: 64
+    ClassOfTravelEnum:
+      enum:
+      - '0'
+      - '1'
+      - '2'
+      - '3'
+      type: string
+      description: |-
+        * `0` - Economy
+        * `1` - Premium Economy
+        * `2` - Business
+        * `3` - First Class
+    Fare:
+      type: object
+      properties:
+        fare_id:
+          type: string
+          maxLength: 128
+        refundable:
+          type: boolean
+        seats_available:
+          type: string
+          maxLength: 16
+        food_onboard:
+          type: string
+          maxLength: 8
+        gst_mandatory:
+          type: boolean
+        price_details:
+          $ref: '#/components/schemas/PriceDetails'
+        baggage:
+          $ref: '#/components/schemas/Baggage'
+      required:
+      - baggage
+      - fare_id
+      - food_onboard
+      - gst_mandatory
+      - price_details
+      - refundable
+      - seats_available
+    Flight:
+      type: object
+      properties:
+        flight_key:
+          type: string
+        flight_id:
+          type: integer
+          nullable: true
+        airline_code:
+          type: string
+          maxLength: 8
+        origin:
+          type: string
+          maxLength: 8
+        destination:
+          type: string
+          maxLength: 8
+        block_ticket_allowed:
+          type: boolean
+        cached:
+          type: boolean
+        repriced:
+          type: boolean
+        is_fare_change:
+          type: boolean
+        gst_entry_allowed:
+          type: boolean
+        has_more_class:
+          type: boolean
+        inventory_type:
+          type: integer
+          nullable: true
+        is_lcc:
+          type: boolean
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlightSegment'
+        fares:
+          type: array
+          items:
+            $ref: '#/components/schemas/Fare'
+      required:
+      - airline_code
+      - destination
+      - fares
+      - flight_key
+      - origin
+      - segments
+    FlightRevalidateRequestRequest:
+      type: object
+      properties:
+        search_key:
+          type: string
+          minLength: 1
+          description: Search token returned by the flight search API.
+          maxLength: 4096
+        flight_key:
+          type: string
+          minLength: 1
+          description: Provider flight key for the selected itinerary.
+          maxLength: 8192
+        fare_id:
+          type: string
+          minLength: 1
+          description: Selected fare identifier returned by the search API.
+          maxLength: 128
+        customer_mobile:
+          type: string
+          description: Customer mobile number used by the provider for reprice validation.
+          maxLength: 20
+        gst_input:
+          type: boolean
+          default: false
+          description: Whether GST details should be considered during revalidation.
+        single_pricing:
+          type: boolean
+          default: true
+          description: Whether the provider should return a single pricing quote.
+        source_type:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Provider source type flag for Air_Reprice.
+      required:
+      - fare_id
+      - flight_key
+      - search_key
+    FlightSearchRequestRequest:
+      type: object
+      properties:
+        origin:
+          type: string
+          minLength: 3
+          description: 3-letter IATA code for the departure airport, e.g., 'DEL'.
+          maxLength: 3
+        destination:
+          type: string
+          minLength: 3
+          description: 3-letter IATA code for the arrival airport, e.g., 'BOM'.
+          maxLength: 3
+        travel_date:
+          type: string
+          format: date
+          description: Date of travel in YYYY-MM-DD format.
+        return_date:
+          type: string
+          format: date
+          nullable: true
+          description: Date of return in YYYY-MM-DD format. Triggers round-trip search
+            if provided.
+        adult_count:
+          type: integer
+          maximum: 9
+          minimum: 1
+          default: 1
+          description: Number of adult passengers (12+ years).
+        child_count:
+          type: integer
+          maximum: 9
+          minimum: 0
+          default: 0
+          description: Number of child passengers (2-11 years).
+        infant_count:
+          type: integer
+          maximum: 9
+          minimum: 0
+          default: 0
+          description: Number of infant passengers (under 2 years).
+        class_of_travel:
+          allOf:
+          - $ref: '#/components/schemas/ClassOfTravelEnum'
+          default: '0'
+          description: |-
+            Cabin class: '0'=Economy, '1'=Premium Economy, '2'=Business, '3'=First Class.
+
+            * `0` - Economy
+            * `1` - Premium Economy
+            * `2` - Business
+            * `3` - First Class
+        airline_code:
+          type: string
+          description: Filter results by specific airline carrier code, e.g., '6E'.
+          maxLength: 5
+      required:
+      - destination
+      - origin
+      - travel_date
+    FlightSegment:
+      type: object
+      properties:
+        segment_id:
+          type: integer
+        airline_code:
+          type: string
+          maxLength: 8
+        airline_name:
+          type: string
+          maxLength: 128
+        flight_number:
+          type: string
+          maxLength: 32
+        aircraft_type:
+          type: string
+          maxLength: 64
+        origin:
+          type: string
+          maxLength: 8
+        origin_city:
+          type: string
+          maxLength: 128
+        origin_terminal:
+          type: string
+          maxLength: 16
+        destination:
+          type: string
+          maxLength: 8
+        destination_city:
+          type: string
+          maxLength: 128
+        destination_terminal:
+          type: string
+          maxLength: 16
+        departure_datetime:
+          type: string
+          maxLength: 64
+        arrival_datetime:
+          type: string
+          maxLength: 64
+        duration:
+          type: string
+          maxLength: 32
+        stop_over:
+          type: string
+          nullable: true
+          maxLength: 64
+        return_flight:
+          type: boolean
+      required:
+      - aircraft_type
+      - airline_code
+      - airline_name
+      - arrival_datetime
+      - departure_datetime
+      - destination
+      - destination_city
+      - destination_terminal
+      - duration
+      - flight_number
+      - origin
+      - origin_city
+      - origin_terminal
+      - segment_id
+    PatchedUserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        phone_number:
+          type: string
+          nullable: true
+          maxLength: 15
+    PriceDetails:
+      type: object
+      properties:
+        currency:
+          type: string
+          maxLength: 8
+        basic_amount:
+          type: number
+          format: double
+        tax_amount:
+          type: number
+          format: double
+        total_amount:
+          type: number
+          format: double
+      required:
+      - basic_amount
+      - currency
+      - tax_amount
+      - total_amount
+    Register:
+      type: object
+      properties:
+        username:
+          type: string
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        phone_number:
+          type: string
+          nullable: true
+          maxLength: 15
+      required:
+      - username
+    RegisterRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        confirm_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        phone_number:
+          type: string
+          nullable: true
+          maxLength: 15
+      required:
+      - confirm_password
+      - password
+      - username
+    RevalidateData:
+      type: object
+      properties:
+        search_key:
+          type: string
+        flight_key:
+          type: string
+        fare_id:
+          type: string
+        repriced:
+          type: boolean
+        is_fare_change:
+          type: boolean
+        flight:
+          $ref: '#/components/schemas/Flight'
+      required:
+      - fare_id
+      - flight
+      - flight_key
+      - is_fare_change
+      - repriced
+      - search_key
+    RevalidateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/RevalidateData'
+      required:
+      - data
+      - message
+      - success
+    RoleEnum:
+      enum:
+      - CUSTOMER
+      - AGENT
+      - ADMIN
+      type: string
+      description: |-
+        * `CUSTOMER` - Customer
+        * `AGENT` - Agent
+        * `ADMIN` - Admin
+    SearchData:
+      type: object
+      properties:
+        search_key:
+          type: string
+        flights:
+          type: array
+          items:
+            $ref: '#/components/schemas/Flight'
+      required:
+      - flights
+      - search_key
+    SearchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/SearchData'
+      required:
+      - data
+      - message
+      - success
+    TokenObtainPair:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+          readOnly: true
+      required:
+      - access
+      - refresh
+    TokenObtainPairRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          writeOnly: true
+          minLength: 1
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - password
+      - username
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
+    TokenRefreshRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          minLength: 1
+      required:
+      - refresh
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+        phone_number:
+          type: string
+          nullable: true
+          maxLength: 15
+      required:
+      - id
+      - role
+      - username
+    UserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        phone_number:
+          type: string
+          nullable: true
+          maxLength: 15
+      required:
+      - username
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

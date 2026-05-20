@@ -4,11 +4,12 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from datetime import date, timedelta
-from flights.serializers import FlightSearchRequestSerializer
+from flights.serializers import FlightSearchRequestSerializer, FlightRevalidateRequestSerializer
 
 class FlightSearchTests(APITestCase):
     def setUp(self):
         self.search_url = reverse('flight_search')
+        self.revalidate_url = reverse('flight_revalidate')
         self.valid_payload = {
             "origin": "DEL",
             "destination": "BOM",
@@ -17,6 +18,15 @@ class FlightSearchTests(APITestCase):
             "child_count": 0,
             "infant_count": 0,
             "class_of_travel": "0"
+        }
+        self.revalidate_payload = {
+            "search_key": "mock_search_token_12345",
+            "flight_key": "mock_flight_key_12345",
+            "fare_id": "4908357683079097850",
+            "customer_mobile": "9173456988",
+            "gst_input": False,
+            "single_pricing": True,
+            "source_type": 0,
         }
 
     def test_serializer_validation_past_date(self):
@@ -43,6 +53,14 @@ class FlightSearchTests(APITestCase):
         serializer = FlightSearchRequestSerializer(data=payload)
         self.assertFalse(serializer.is_valid())
         self.assertIn("infant_count", serializer.errors)
+
+    def test_revalidate_serializer_requires_core_fields(self):
+        payload = self.revalidate_payload.copy()
+        payload.pop("fare_id")
+
+        serializer = FlightRevalidateRequestSerializer(data=payload)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("fare_id", serializer.errors)
 
     @patch('flights.services.requests.post')
     def test_flight_search_api_success(self, mock_post):
@@ -157,3 +175,107 @@ class FlightSearchTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
         self.assertFalse(response.data['success'])
         self.assertIn("Provider Error: Sector Not Available", response.data['message'])
+
+    @patch('flights.services.requests.post')
+    def test_flight_revalidate_api_success(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "0000",
+                "Error_Desc": "SUCCESS",
+                "Error_InnerException": "",
+                "Request_Id": "12345",
+                "Status_Id": "11"
+            },
+            "AirRepriceResponses": [
+                {
+                    "IsFareChange": False,
+                    "Flight": {
+                        "Airline_Code": "SG",
+                        "Block_Ticket_Allowed": True,
+                        "Cached": False,
+                        "Destination": "BOM",
+                        "Flight_Id": "5416863216316396891",
+                        "Flight_Key": "mock_flight_key_12345",
+                        "IsFareChange": False,
+                        "IsLCC": True,
+                        "InventoryType": 1,
+                        "Repriced": True,
+                        "Segments": [
+                            {
+                                "Segment_Id": 0,
+                                "Airline_Code": "SG",
+                                "Airline_Name": "SpiceJet",
+                                "Flight_Number": "6287",
+                                "Aircraft_Type": "737",
+                                "Origin": "DEL",
+                                "Origin_City": "DELHI",
+                                "Origin_Terminal": "3",
+                                "Destination": "BOM",
+                                "Destination_City": "MUMBAI",
+                                "Destination_Terminal": "2",
+                                "Departure_DateTime": "06/12/2026 00:50",
+                                "Arrival_DateTime": "06/12/2026 02:40",
+                                "Duration": "01:50",
+                                "Stop_Over": None,
+                                "Return_Flight": False
+                            }
+                        ],
+                        "Fares": [
+                            {
+                                "FareDetails": [
+                                    {
+                                        "AirportTax_Amount": 563,
+                                        "Basic_Amount": 1924,
+                                        "Currency_Code": "INR",
+                                        "Total_Amount": 2487,
+                                        "Free_Baggage": {
+                                            "Check_In_Baggage": "15 KG",
+                                            "Hand_Baggage": "7 KG"
+                                        }
+                                    }
+                                ],
+                                "FareType": 0,
+                                "Fare_Id": "4908357683079097850",
+                                "Food_onboard": "F",
+                                "GSTMandatory": False,
+                                "Refundable": True,
+                                "Seats_Available": "1"
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        mock_post.return_value = mock_response
+
+        response = self.client.post(self.revalidate_url, self.revalidate_payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['search_key'], self.revalidate_payload['search_key'])
+        self.assertEqual(response.data['fare_id'], self.revalidate_payload['fare_id'])
+        self.assertTrue(response.data['repriced'])
+        self.assertEqual(response.data['flight']['airline_code'], 'SG')
+        self.assertEqual(response.data['flight']['fares'][0]['price_details']['total_amount'], 2487.0)
+
+    @patch('flights.services.requests.post')
+    def test_flight_revalidate_api_provider_failure(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "E001",
+                "Error_Desc": "Fare Not Available",
+                "Error_InnerException": "",
+                "Request_Id": "12345",
+                "Status_Id": "11"
+            }
+        }
+        mock_post.return_value = mock_response
+
+        response = self.client.post(self.revalidate_url, self.revalidate_payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertFalse(response.data['success'])
+        self.assertIn("Provider Error: Fare Not Available", response.data['message'])
