@@ -24,6 +24,7 @@ api_urlpatterns = [
     path('bookings/', include('bookings.urls')),
     path('payments/', include('payments.urls')),
     path('agents/', include('agents.urls')),
+    path('tickets/', include('tickets.urls')),
 ]
 
 urlpatterns = [
