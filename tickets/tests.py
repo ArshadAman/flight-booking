@@ -284,6 +284,7 @@ class TicketAPITests(APITestCase):
                             "Record_Locator": "210908133015"
                         }
                     ],
+                    "Flight_Id": "5416863216316396891",
                     "Status_Id": "11"
                 }
             ]
@@ -306,6 +307,7 @@ class TicketAPITests(APITestCase):
         # Assert database record exists
         ticket_in_db = Ticket.objects.get(pnr_number='KEVG6H')
         self.assertEqual(ticket_in_db.user, self.customer_a)
+        self.assertEqual(ticket_in_db.flight_id, '5416863216316396891')
         self.assertEqual(len(ticket_in_db.passengers_data), 1)
         self.assertEqual(ticket_in_db.passengers_data[0]['first_name'], 'John')
 
@@ -359,4 +361,65 @@ class TicketAPITests(APITestCase):
         # Assert no extra Ticket is written to DB
         # Count should remain at 2 (the setup tickets)
         self.assertEqual(Ticket.objects.count(), 2)
+
+    @patch('flights.services.requests.post')
+    def test_dynamic_cancellation_flow(self, mock_post):
+        """
+        Verify that ticket cancellation triggers a dynamic GDS cancel request
+        containing all passenger and segment combinations with correct FlightId.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        
+        # Populate dynamic ticket properties
+        self.ticket_a.flight_id = "5416863216316396891"
+        self.ticket_a.booking_ref = "FBB64ZDT"
+        self.ticket_a.passengers_data = [
+            {"first_name": "PaxOne", "last_name": "Doe", "gender": "M"},
+            {"first_name": "PaxTwo", "last_name": "Doe", "gender": "F"}
+        ]
+        self.ticket_a.segments_data = [
+            {"segment_id": 0, "flight_number": "AI-9757"},
+            {"segment_id": 1, "flight_number": "AI-9758"}
+        ]
+        self.ticket_a.save()
+
+        cancel_url = reverse('ticket-cancel', kwargs={'pk': self.ticket_a.id})
+
+        # Mock successful GDS cancellation response
+        mock_cancel_resp = MagicMock()
+        mock_cancel_resp.status_code = 200
+        mock_cancel_resp.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "0000",
+                "Error_Desc": "SUCCESS"
+            }
+        }
+        mock_post.return_value = mock_cancel_resp
+
+        response = self.client.post(cancel_url, {"remarks": "Changed travel plans"}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['gds_cancelled'])
+        self.assertEqual(response.data['status'], 'CANCELLED')
+
+        # Verify that requests.post was called with the correct dynamic cancel details
+        mock_post.assert_called_once()
+        called_args, called_kwargs = mock_post.call_args
+        called_payload = called_kwargs.get('json', {})
+        
+        self.assertEqual(called_payload.get('Airline_PNR'), self.ticket_a.pnr_number)
+        self.assertEqual(called_payload.get('RefNo'), self.ticket_a.booking_ref)
+        self.assertEqual(called_payload.get('ReqRemarks'), "Changed travel plans")
+        
+        cancel_details = called_payload.get('AirTicketCancelDetails', [])
+        # We have 2 passengers x 2 segments = 4 combinations
+        self.assertEqual(len(cancel_details), 4)
+        
+        expected_details = [
+            {"FlightId": "5416863216316396891", "PassengerId": "1", "SegmentId": "0"},
+            {"FlightId": "5416863216316396891", "PassengerId": "1", "SegmentId": "1"},
+            {"FlightId": "5416863216316396891", "PassengerId": "2", "SegmentId": "0"},
+            {"FlightId": "5416863216316396891", "PassengerId": "2", "SegmentId": "1"}
+        ]
+        self.assertEqual(cancel_details, expected_details)
 

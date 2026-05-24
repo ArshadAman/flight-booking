@@ -309,7 +309,7 @@ class ProviderService:
         if not booking_ref:
             raise ProviderAPIException("Provider did not return a valid booking reference number.")
 
-        return booking_ref
+        return booking_ref, request_id
 
     @classmethod
     def issue_ticket(cls, booking_ref_no, request_id=None):
@@ -384,7 +384,7 @@ class ProviderService:
 
         # Step 2: Temporary Seat Reservation
         logger.info(f"Orchestrating Buy Ticket: Step 2 (Temp Booking) [ID: {request_id}]")
-        booking_ref = cls.temp_booking(validated_data, request_id=request_id)
+        booking_ref, request_id = cls.temp_booking(validated_data, request_id=request_id)
 
         # Introduce 5 seconds delay for GDS reservation stabilization
         logger.info(f"Delaying ticketing request for 5 seconds to let GDS settle...")
@@ -397,19 +397,23 @@ class ProviderService:
         # Step 4: Extract and Normalize finalized values
         pnr_number = None
         ticket_number = None
+        flight_id = None
         
         if pnr_details:
             pnrs = pnr_details[0].get('AirlinePNRs', [])
             if pnrs:
                 pnr_number = pnrs[0].get('Airline_PNR')
                 ticket_number = pnrs[0].get('Record_Locator')
+            flight_id = pnr_details[0].get('Flight_Id')
+
+        flight = reprice_result.get('flight', {})
+        if not flight_id:
+            flight_id = flight.get('flight_id')
 
         if not pnr_number:
             pnr_number = f"PNR{random.randint(10000, 99999)}"
         if not ticket_number:
             ticket_number = f"ETKT-{random.randint(1000000, 9999999)}"
-
-        flight = reprice_result.get('flight', {})
         segments = flight.get('segments', [])
         fares = flight.get('fares', [])
 
@@ -455,6 +459,8 @@ class ProviderService:
         return {
             "pnr_number": pnr_number,
             "ticket_number": ticket_number,
+            "booking_ref": booking_ref,
+            "flight_id": flight_id,
             "origin": computed_origin,
             "destination": computed_destination,
             "departure_datetime": departure_dt,
@@ -475,6 +481,72 @@ class ProviderService:
             "segments_data": segments,
             "passengers_data": passengers_data
         }
+
+    @classmethod
+    def cancel_ticket(cls, pnr, booking_ref, cancel_details=None, flight_id="0", passenger_id="1", segment_id="0", remarks="Customer requested cancellation"):
+        """
+        Sends a ticket cancellation request to the GDS Air_TicketCancellation endpoint.
+        Returns True on success, raises ProviderAPIException on failure.
+        """
+        base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
+        endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_TicketCancellation"
+
+        request_id = cls.generate_request_id()
+        auth_header = {
+            "UserId": settings.FLIGHT_API_USER_ID,
+            "Password": settings.FLIGHT_API_PASSWORD,
+            "IP_Address": settings.FLIGHT_API_IP_ADDRESS,
+            "Request_Id": request_id,
+            "IMEI_Number": settings.FLIGHT_API_IMEI,
+        }
+
+        if not cancel_details:
+            cancel_details = [
+                {
+                    "FlightId": flight_id,
+                    "PassengerId": passenger_id,
+                    "SegmentId": segment_id,
+                }
+            ]
+
+        payload = {
+            "Auth_Header": auth_header,
+            "AirTicketCancelDetails": cancel_details,
+            "Airline_PNR": pnr,
+            "RefNo": booking_ref or "",
+            "CancelCode": "005",
+            "ReqRemarks": remarks,
+            "CancellationType": 0,
+        }
+
+        masked_payload = payload.copy()
+        masked_payload["Auth_Header"] = auth_header.copy()
+        masked_payload["Auth_Header"]["Password"] = "********"
+        logger.info(f"Outgoing FlyShop Cancellation Request [ID: {request_id}]: {masked_payload}")
+
+        try:
+            response = requests.post(endpoint, json=payload, timeout=60)
+            response.raise_for_status()
+            response_json = response.json()
+        except requests.RequestException as e:
+            logger.error(f"HTTP Connection failure to FlyShop Cancellation [ID: {request_id}]: {str(e)}")
+            raise ProviderAPIException("Unable to connect to the external cancellation service provider.")
+        except ValueError:
+            logger.error(f"Invalid JSON response returned from FlyShop Cancellation [ID: {request_id}]")
+            raise ProviderAPIException("Received invalid response from the cancellation service provider.")
+
+        logger.info(f"Incoming FlyShop Cancellation Response [ID: {request_id}] status_code={response.status_code}")
+
+        response_header = response_json.get('Response_Header', {})
+        error_code = response_header.get('Error_Code', '0000')
+        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+
+        if error_code != '0000' and error_code != '000':
+            logger.error(f"FlyShop Cancellation failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
+            raise ProviderAPIException(f"Cancellation Error: {error_desc} (Code: {error_code})")
+
+        logger.info(f"FlyShop Cancellation succeeded [ID: {request_id}] PNR: {pnr}")
+        return True
 
     @classmethod
     def _normalize_trip_details(cls, raw_trip_details):

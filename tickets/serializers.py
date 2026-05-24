@@ -12,6 +12,8 @@ class TicketSerializer(serializers.ModelSerializer):
             'user',
             'pnr_number',
             'ticket_number',
+            'booking_ref',
+            'flight_id',
             'status',
             'origin',
             'destination',
@@ -121,3 +123,14 @@ class TicketPurchaseRequestSerializer(serializers.Serializer):
         help_text="List of passenger detail dicts included in ticket booking."
     )
 
+
+class TicketCancelRequestSerializer(serializers.Serializer):
+    """
+    Serializer for ticket cancellation requests.
+    """
+    remarks = serializers.CharField(
+        max_length=256,
+        required=False,
+        default="Customer requested cancellation",
+        help_text="Optional reason for cancellation."
+    )

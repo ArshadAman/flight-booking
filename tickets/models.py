@@ -36,6 +36,18 @@ class Ticket(BaseModel):
         null=True, 
         help_text="Airline Ticket Number"
     )
+    booking_ref = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="GDS provider Booking_RefNo used for cancellation (e.g. 'FBB64ZDT')."
+    )
+    flight_id = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="GDS flight ID used for cancellation."
+    )
     status = models.CharField(
         max_length=20, 
         choices=STATUS_CHOICES, 
