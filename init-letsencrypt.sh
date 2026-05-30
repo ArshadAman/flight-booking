@@ -24,21 +24,14 @@ if [ ! -e "$data_path/conf/options-ssl-nginx.conf" ] || [ ! -e "$data_path/conf/
   echo
 fi
 
-echo "### Creating dummy certificate for $domains ..."
+echo "### Creating robust 10-year self-signed fallback certificate for $domains ..."
 path="/etc/letsencrypt/live/$domains"
 docker compose run --entrypoint \
-  "sh -c 'mkdir -p /etc/letsencrypt/live/$domains && openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 1 -keyout "$path/privkey.pem" -out "$path/fullchain.pem" -subj \"/CN=localhost\"'" certbot
+  "sh -c 'mkdir -p /etc/letsencrypt/live/$domains && openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 3650 -keyout "$path/privkey.pem" -out "$path/fullchain.pem" -subj \"/CN=$domains\"'" certbot
 echo
 
-echo "### Starting nginx ..."
-docker compose up --force-recreate -d nginx
-echo
-
-echo "### Deleting dummy certificate for $domains ..."
-docker compose run --entrypoint \
-  "rm -Rf /etc/letsencrypt/live/$domains && \
-   rm -Rf /etc/letsencrypt/archive/$domains && \
-   rm -Rf /etc/letsencrypt/renewal/$domains.conf" certbot
+echo "### Starting all containers (Nginx, Django, DB, Redis) ..."
+docker compose up -d
 echo
 
 echo "### Requesting Let's Encrypt certificate for $domains ..."
@@ -60,6 +53,8 @@ if [ $staging -ne 0 ]; then
   staging_arg="--staging"
 fi
 
+# Try to request the certificate. If it fails, keep the self-signed fallback.
+set +e
 docker compose run --entrypoint \
   "certbot certonly --webroot -w /var/www/certbot \
     $staging_arg \
@@ -69,7 +64,21 @@ docker compose run --entrypoint \
     --agree-tos \
     --force-renewal \
     --non-interactive" certbot
-echo
+certbot_status=$?
+set -e
 
-echo "### Reloading nginx ..."
-docker compose exec nginx nginx -s reload
+if [ $certbot_status -ne 0 ]; then
+  echo "========================================================================="
+  echo "WARNING: Certbot failed to obtain a real SSL certificate (likely due to DNS/CNAME issues)."
+  echo "FALLBACK: Preserving the 10-year self-signed certificate."
+  echo "Your application is ONLINE over HTTPS, but browsers will show a warning"
+  echo "until the DNS issues are resolved and you rerun this script."
+  echo "========================================================================="
+else
+  echo "========================================================================="
+  echo "SUCCESS: Obtained real Let's Encrypt certificate!"
+  echo "### Reloading nginx ..."
+  docker compose exec nginx nginx -s reload
+  echo "========================================================================="
+fi
+
