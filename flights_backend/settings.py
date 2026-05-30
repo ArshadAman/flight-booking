@@ -183,6 +183,12 @@ CELERY_TIMEZONE = TIME_ZONE
 # CORS Settings
 CORS_ALLOW_ALL_ORIGINS = True # Change in production
 
+CSRF_TRUSTED_ORIGINS = [
+    'https://beverly-readily-hewlett-school.trycloudflare.com',
+    'https://api.occ.services',
+]
+
+
 # FlyShop API Credentials
 FLIGHT_API_BASE_URL = os.getenv('FLIGHT_API_BASE_URL', 'http://uat.flyshop.in/')
 FLIGHT_API_USER_ID = os.getenv('FLIGHT_API_USER_ID', 'traveldealuat')
