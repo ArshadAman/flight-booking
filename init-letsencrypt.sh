@@ -3,7 +3,7 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-domains=(api.occ.services)
+domains="api.occ.services"
 rsa_key_size=4096
 data_path="./data/certbot"
 email="admin@occ.services" # Replace with your email address or leave blank for register-unsafely-without-email
@@ -37,9 +37,10 @@ echo
 echo "### Requesting Let's Encrypt certificate for $domains ..."
 # Join $domains to comma-separated string
 domain_args=""
-for domain in "${domains[@]}"; do
+for domain in $domains; do
   domain_args="$domain_args -d $domain"
 done
+
 
 # Select appropriate email arg
 email_arg="--register-unsafely-without-email"
