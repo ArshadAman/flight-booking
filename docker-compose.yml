@@ -68,7 +68,7 @@ services:
 
   tunnel:
     image: cloudflare/cloudflared:latest
-    entrypoint: ["cloudflared", "tunnel", "--no-autoupdate", "run", "--url", "http://web:8000"]
+    entrypoint: ["cloudflared", "tunnel", "--no-autoupdate", "--url", "http://web:8000"]
     restart: always
     depends_on:
       - web
@@ -76,6 +76,7 @@ services:
 volumes:
   postgres_data:
   static_volume:
+
 
 
 
