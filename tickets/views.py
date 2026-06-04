@@ -67,6 +67,8 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = TicketCancelRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         remarks = serializer.validated_data.get('remarks', 'Customer requested cancellation')
+        cancellation_type = serializer.validated_data.get('cancellation_type', 0)
+        cancel_code = serializer.validated_data.get('cancel_code', '005')
 
         # Check ticket isn't already cancelled
         if ticket.status == Ticket.STATUS_CANCELLED:
@@ -108,15 +110,38 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                 pnr=ticket.pnr_number or '',
                 booking_ref=ticket.booking_ref or '',
                 cancel_details=cancel_details,
-                remarks=remarks
+                remarks=remarks,
+                cancellation_type=cancellation_type
             )
             gds_cancelled = True
         except ProviderAPIException as e:
             gds_error = str(e)
 
+        # MMT-style Cancellation Fee & Refund Calculations
+        paid_amount = float(ticket.total_amount)
+        if cancellation_type == 0:  # Cancelled by User
+            airline_penalty = min(3000.0 * pax_count, float(ticket.basic_amount or 0.0))
+            service_fee = 300.0 * pax_count
+            refund_amount = max(0.0, paid_amount - (airline_penalty + service_fee))
+        else:  # Cancelled by Airline (Flight Rescheduled / Cancelled)
+            airline_penalty = 0.0
+            service_fee = 0.0
+            refund_amount = paid_amount
+
+        ticket.cancellation_data = {
+            "cancelled_by": "User" if cancellation_type == 0 else "Airline",
+            "cancellation_type": cancellation_type,
+            "cancel_code": cancel_code,
+            "paid_amount": paid_amount,
+            "airline_penalty": airline_penalty,
+            "service_fee": service_fee,
+            "refund_amount": refund_amount,
+            "remarks": remarks
+        }
+
         # Always mark as cancelled locally even if GDS is unreachable (offline tickets)
         ticket.status = Ticket.STATUS_CANCELLED
-        ticket.save(update_fields=['status', 'updated_at'])
+        ticket.save(update_fields=['status', 'cancellation_data', 'updated_at'])
 
         response_serializer = self.get_serializer(ticket)
         response_data = response_serializer.data
@@ -125,3 +150,88 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             response_data['gds_error'] = gds_error
 
         return Response(response_data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='ssr', url_name='ssr')
+    def get_ssr(self, request, *args, **kwargs):
+        """
+        GET /api/v1/tickets/{id}/ssr/
+        Retrieves post-booking SSR options & seat maps.
+        """
+        ticket = self.get_object()
+
+        # Check that the ticket is confirmed
+        if ticket.status != Ticket.STATUS_CONFIRMED:
+            return Response(
+                {"detail": "SSR options are only available for confirmed bookings."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            ssr_options = ProviderService.get_post_ssr(
+                booking_ref_no=ticket.booking_ref or '',
+                airline_pnr=ticket.pnr_number or ''
+            )
+        except ProviderAPIException as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        return Response(ssr_options, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='ssr/add', url_name='ssr-add')
+    def add_ssr(self, request, *args, **kwargs):
+        """
+        POST /api/v1/tickets/{id}/ssr/add/
+        Accepts body e.g., {'BookingSSRDetails': [{'Pax_Id': 1, 'SSR_Key': '...'}]}.
+        Calls Initiate and Confirm GDS endpoints sequentially, and saves confirmed choices to Ticket.ssr_data.
+        """
+        ticket = self.get_object()
+
+        # Check that the ticket is confirmed
+        if ticket.status != Ticket.STATUS_CONFIRMED:
+            return Response(
+                {"detail": "SSRs can only be added to confirmed bookings."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        booking_ssr_details = request.data.get('BookingSSRDetails')
+        if not booking_ssr_details or not isinstance(booking_ssr_details, list):
+            return Response(
+                {"detail": "BookingSSRDetails must be a non-empty list of selected SSRs."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        for detail in booking_ssr_details:
+            if not isinstance(detail, dict) or 'Pax_Id' not in detail or 'SSR_Key' not in detail:
+                return Response(
+                    {"detail": "Each SSR detail must contain 'Pax_Id' and 'SSR_Key'."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        try:
+            # Step 1: Initiate Post SSR
+            ProviderService.initiate_post_ssr(
+                booking_ref_no=ticket.booking_ref or '',
+                booking_ssr_details=booking_ssr_details,
+                airline_pnr=ticket.pnr_number or ''
+            )
+
+            # Step 2: Confirm Post SSR
+            ProviderService.confirm_post_ssr(
+                booking_ref_no=ticket.booking_ref or '',
+                booking_ssr_details=booking_ssr_details,
+                airline_pnr=ticket.pnr_number or ''
+            )
+        except ProviderAPIException as e:
+            return Response(
+                {"detail": f"Failed to add SSR: {str(e)}"},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        # Update local Ticket record's ssr_data
+        ticket.ssr_data = {"BookingSSRDetails": booking_ssr_details}
+        ticket.save(update_fields=['ssr_data', 'updated_at'])
+
+        response_serializer = self.get_serializer(ticket)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)

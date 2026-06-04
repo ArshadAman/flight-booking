@@ -160,6 +160,16 @@ class Ticket(BaseModel):
         blank=True,
         help_text="Manifest details containing name, document, and gender details of all passengers."
     )
+    ssr_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Confirmed passenger-wise Special Service Requests (meals, baggage, seats, etc.)"
+    )
+    cancellation_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Metadata regarding ticket cancellation charges, initiator, and refund amounts."
+    )
 
     class Meta:
         verbose_name = 'Ticket'

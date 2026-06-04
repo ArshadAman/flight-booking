@@ -42,6 +42,8 @@ class ProviderService:
         infants = validated_data.get('infant_count', 0)
         class_of_travel = validated_data.get('class_of_travel', '0')
         airline_code = validated_data.get('airline_code', '')
+        student_fare_search = validated_data.get('student_fare_search', False)
+        defence_fare_search = validated_data.get('defence_fare_search', False)
 
         # Generate unique request trace id
         request_id = cls.generate_request_id()
@@ -56,24 +58,39 @@ class ProviderService:
         }
 
         # Build TripInfo list
-        trip_info = [
-            {
-                "Origin": origin,
-                "Destination": destination,
-                "TravelDate": travel_date.strftime("%m/%d/%Y"),
-                "Trip_Id": 0
-            }
-        ]
+        trip_segments = validated_data.get('trip_segments', [])
+        explicit_travel_type = validated_data.get('travel_type', None)
 
-        travel_type = 0  # 0 = One Way, 1 = Return
-        if return_date:
-            travel_type = 1
-            trip_info.append({
-                "Origin": destination,
-                "Destination": origin,
-                "TravelDate": return_date.strftime("%m/%d/%Y"),
-                "Trip_Id": 1
-            })
+        if explicit_travel_type == 2 and trip_segments:
+            # Multi-city: each segment becomes a TripInfo leg
+            travel_type = 2
+            trip_info = [
+                {
+                    "Origin": seg['origin'],
+                    "Destination": seg['destination'],
+                    "TravelDate": seg['travel_date'].strftime("%m/%d/%Y"),
+                    "Trip_Id": idx
+                }
+                for idx, seg in enumerate(trip_segments)
+            ]
+        else:
+            trip_info = [
+                {
+                    "Origin": origin,
+                    "Destination": destination,
+                    "TravelDate": travel_date.strftime("%m/%d/%Y"),
+                    "Trip_Id": 0
+                }
+            ]
+            travel_type = 0  # 0 = One Way, 1 = Return
+            if return_date:
+                travel_type = 1
+                trip_info.append({
+                    "Origin": destination,
+                    "Destination": origin,
+                    "TravelDate": return_date.strftime("%m/%d/%Y"),
+                    "Trip_Id": 1
+                })
 
         # Base search request payload
         payload = {
@@ -86,6 +103,9 @@ class ProviderService:
             "Infant_Count": str(infants),
             "Class_Of_Travel": class_of_travel,
             "InventoryType": 0,
+            "SrCitizen_Search": False,
+            "StudentFare_Search": student_fare_search,
+            "DefenceFare_Search": defence_fare_search,
             "Filtered_Airline": [
                 {
                     "Airline_Code": airline_code
@@ -231,6 +251,15 @@ class ProviderService:
         # Format PAX Details for FlyShop
         pax_list = []
         for idx, pax in enumerate(validated_data.get('passengers', []), 1):
+            dob_val = pax.get('dob')
+            dob_str = dob_val.strftime("%m/%d/%Y") if dob_val else None
+
+            defence_issue_val = pax.get('defence_issue_date')
+            defence_issue_str = defence_issue_val.strftime("%m/%d/%Y") if hasattr(defence_issue_val, 'strftime') else (defence_issue_val or None)
+
+            defence_expiry_val = pax.get('defence_expiry_date')
+            defence_expiry_str = defence_expiry_val.strftime("%m/%d/%Y") if hasattr(defence_expiry_val, 'strftime') else (defence_expiry_val or None)
+
             pax_list.append({
                 "Pax_Id": idx,
                 "Pax_type": pax.get('pax_type', 0),  # 0=Adult, 1=Child, 2=Infant
@@ -239,13 +268,17 @@ class ProviderService:
                 "Last_Name": pax.get('last_name'),
                 "Gender": pax.get('gender', 0),  # 0=Male, 1=Female
                 "Age": None,
-                "DOB": pax.get('dob').strftime("%m/%d/%Y") if pax.get('dob') else None,
+                "DOB": dob_str,
                 "Passport_Number": pax.get('passport_number'),
                 "Passport_Issuing_Country": None,
                 "Passport_Expiry": None,
                 "Nationality": None,
                 "Pancard_Number": pax.get('pancard_number'),
-                "FrequentFlyerDetails": None
+                "FrequentFlyerDetails": None,
+                "Student_Id": pax.get('student_id') or None,
+                "DefenceServiceId": pax.get('defence_service_id') or None,
+                "DefenceIssueDate": defence_issue_str,
+                "DefenceExpiryDate": defence_expiry_str,
             })
 
         payload = {
@@ -263,7 +296,7 @@ class ProviderService:
                 {
                     "Search_Key": validated_data.get('search_key'),
                     "Flight_Key": validated_data.get('flight_key'),
-                    "BookingSSRDetails": []
+                    "BookingSSRDetails": validated_data.get('booking_ssr_details', [])
                 }
             ],
             "CostCenterId": 0,
@@ -446,15 +479,40 @@ class ProviderService:
 
         passengers_data = []
         for pax in validated_data.get('passengers', []):
-            passengers_data.append({
+            dob_val = pax.get('dob')
+            dob_str = dob_val.strftime("%Y-%m-%d") if dob_val else None
+
+            pax_entry = {
                 "title": pax.get('title', 'Mr'),
                 "first_name": pax.get('first_name'),
                 "last_name": pax.get('last_name'),
                 "gender": "M" if pax.get('gender') == 0 else "F",
-                "dob": pax.get('dob').strftime("%Y-%m-%d") if pax.get('dob') else None,
+                "dob": dob_str,
                 "passport_number": pax.get('passport_number'),
                 "pancard_number": pax.get('pancard_number')
-            })
+            }
+            if pax.get('student_id'):
+                pax_entry['student_id'] = pax.get('student_id')
+            if pax.get('defence_service_id'):
+                pax_entry['defence_service_id'] = pax.get('defence_service_id')
+
+            defence_issue = pax.get('defence_issue_date')
+            if defence_issue:
+                pax_entry['defence_issue_date'] = defence_issue.strftime("%Y-%m-%d") if hasattr(defence_issue, 'strftime') else defence_issue
+
+            defence_expiry = pax.get('defence_expiry_date')
+            if defence_expiry:
+                pax_entry['defence_expiry_date'] = defence_expiry.strftime("%Y-%m-%d") if hasattr(defence_expiry, 'strftime') else defence_expiry
+
+            # Preserve meal choices if present
+            if pax.get('outbound_meal'):
+                pax_entry['outbound_meal'] = pax.get('outbound_meal')
+            if pax.get('return_meal'):
+                pax_entry['return_meal'] = pax.get('return_meal')
+            if pax.get('meal_code'):
+                pax_entry['meal_code'] = pax.get('meal_code')
+
+            passengers_data.append(pax_entry)
 
         return {
             "pnr_number": pnr_number,
@@ -479,11 +537,12 @@ class ProviderService:
             "is_refundable": primary_fare.get('refundable', True),
             "food_onboard": primary_fare.get('food_onboard', ''),
             "segments_data": segments,
-            "passengers_data": passengers_data
+            "passengers_data": passengers_data,
+            "ssr_data": {"BookingSSRDetails": validated_data.get('booking_ssr_details', [])}
         }
 
     @classmethod
-    def cancel_ticket(cls, pnr, booking_ref, cancel_details=None, flight_id="0", passenger_id="1", segment_id="0", remarks="Customer requested cancellation"):
+    def cancel_ticket(cls, pnr, booking_ref, cancel_details=None, flight_id="0", passenger_id="1", segment_id="0", remarks="Customer requested cancellation", cancellation_type=0):
         """
         Sends a ticket cancellation request to the GDS Air_TicketCancellation endpoint.
         Returns True on success, raises ProviderAPIException on failure.
@@ -516,7 +575,7 @@ class ProviderService:
             "RefNo": booking_ref or "",
             "CancelCode": "005",
             "ReqRemarks": remarks,
-            "CancellationType": 0,
+            "CancellationType": cancellation_type,
         }
 
         masked_payload = payload.copy()
@@ -546,6 +605,310 @@ class ProviderService:
             raise ProviderAPIException(f"Cancellation Error: {error_desc} (Code: {error_code})")
 
         logger.info(f"FlyShop Cancellation succeeded [ID: {request_id}] PNR: {pnr}")
+        return True
+
+    @classmethod
+    def get_pre_ssr(cls, search_key, flight_key, request_id=None):
+        """
+        Retrieves pre-booking SSR options (seats, meals, baggage, etc.) from FlyShop GDS.
+        Queries both Air_GetSSR and Air_GetSeatMap and combines their responses.
+        """
+        if not request_id:
+            request_id = cls.generate_request_id()
+
+        # 1. Fetch main SSR details (meals, baggage, wheelchair)
+        base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
+        endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_GetSSR"
+
+        auth_header = {
+            "UserId": settings.FLIGHT_API_USER_ID,
+            "Password": settings.FLIGHT_API_PASSWORD,
+            "IP_Address": settings.FLIGHT_API_IP_ADDRESS,
+            "Request_Id": request_id,
+            "IMEI_Number": settings.FLIGHT_API_IMEI
+        }
+
+        payload = {
+            "Auth_Header": auth_header,
+            "Search_Key": search_key,
+            "AirSSRRequestDetails": [
+                {
+                    "Flight_Key": flight_key
+                }
+            ]
+        }
+
+        masked_payload = payload.copy()
+        masked_payload["Auth_Header"] = auth_header.copy()
+        masked_payload["Auth_Header"]["Password"] = "********"
+        logger.info(f"Outgoing FlyShop GetSSR Request [ID: {request_id}]: {masked_payload}")
+
+        try:
+            response = requests.post(endpoint, json=payload, timeout=60)
+            response.raise_for_status()
+            ssr_response = response.json()
+        except requests.RequestException as e:
+            logger.error(f"HTTP Connection failure to FlyShop GetSSR [ID: {request_id}]: {str(e)}")
+            raise ProviderAPIException("Unable to connect to the external flight service provider.")
+        except ValueError:
+            logger.error(f"Invalid JSON response returned from FlyShop GetSSR [ID: {request_id}]")
+            raise ProviderAPIException("Received invalid response from the flight service provider.")
+
+        logger.info(f"Incoming FlyShop GetSSR Response [ID: {request_id}] status_code={response.status_code}")
+
+        response_header = ssr_response.get('Response_Header', {})
+        error_code = response_header.get('Error_Code', '0000')
+        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+
+        if error_code != '0000' and error_code != '000':
+            logger.error(f"FlyShop GetSSR failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
+            raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
+
+        # 2. Fetch Seat Map details (with graceful degradation on failure)
+        air_seat_maps = []
+        try:
+            seat_map_res = cls.get_seat_map(search_key, flight_key, request_id=request_id)
+            air_seat_maps = seat_map_res.get("AirSeatMaps") or []
+        except Exception as e:
+            logger.warning(f"Failed to fetch seat map for pre-booking GDS SSR [ID: {request_id}]. Gracefully degrading: {str(e)}")
+
+        # 3. Combine response payload
+        combined_response = {
+            "AirSeatMaps": air_seat_maps,
+            "SSRFlightDetails": ssr_response.get("SSRFlightDetails") or [],
+            "Response_Header": response_header
+        }
+        return combined_response
+
+    @classmethod
+    def get_seat_map(cls, search_key, flight_key, request_id=None):
+        """
+        Retrieves pre-booking Seat Map from FlyShop GDS.
+        """
+        base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
+        endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_GetSeatMap"
+
+        if not request_id:
+            request_id = cls.generate_request_id()
+
+        auth_header = {
+            "UserId": settings.FLIGHT_API_USER_ID,
+            "Password": settings.FLIGHT_API_PASSWORD,
+            "IP_Address": settings.FLIGHT_API_IP_ADDRESS,
+            "Request_Id": request_id,
+            "IMEI_Number": settings.FLIGHT_API_IMEI
+        }
+
+        payload = {
+            "Auth_Header": auth_header,
+            "Search_Key": search_key,
+            "Flight_Keys": [flight_key],
+            "PAX_Details": [
+                {
+                    "Pax_Id": 1,
+                    "Pax_type": 0,
+                    "Title": "Mr",
+                    "First_Name": "Testing",
+                    "Last_Name": "Sample",
+                    "Gender": 0,
+                    "Age": None,
+                    "DOB": None,
+                    "Passport_Number": None,
+                    "Passport_Issuing_Country": None,
+                    "Passport_Expiry": None,
+                    "Nationality": None,
+                    "FrequentFlyerDetails": None
+                }
+            ]
+        }
+
+        masked_payload = payload.copy()
+        masked_payload["Auth_Header"] = auth_header.copy()
+        masked_payload["Auth_Header"]["Password"] = "********"
+        logger.info(f"Outgoing FlyShop GetSeatMap Request [ID: {request_id}]: {masked_payload}")
+
+        try:
+            response = requests.post(endpoint, json=payload, timeout=60)
+            response.raise_for_status()
+            response_json = response.json()
+        except requests.RequestException as e:
+            logger.error(f"HTTP Connection failure to FlyShop GetSeatMap [ID: {request_id}]: {str(e)}")
+            raise ProviderAPIException("Unable to connect to the external flight seat map service provider.")
+        except ValueError:
+            logger.error(f"Invalid JSON response returned from FlyShop GetSeatMap [ID: {request_id}]")
+            raise ProviderAPIException("Received invalid response from the seat map service provider.")
+
+        logger.info(f"Incoming FlyShop GetSeatMap Response [ID: {request_id}] status_code={response.status_code}")
+
+        response_header = response_json.get('Response_Header', {})
+        error_code = response_header.get('Error_Code', '0000')
+        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+
+        if error_code != '0000' and error_code != '000':
+            logger.error(f"FlyShop GetSeatMap failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
+            raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
+
+        return response_json
+
+    @classmethod
+    def get_post_ssr(cls, booking_ref_no, airline_pnr=None, request_id=None):
+        """
+        Retrieves post-booking SSR options (seats, meals, baggage, etc.) from FlyShop GDS.
+        """
+        base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
+        endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_GetPostSSR"
+
+        if not request_id:
+            request_id = cls.generate_request_id()
+
+        auth_header = {
+            "UserId": settings.FLIGHT_API_USER_ID,
+            "Password": settings.FLIGHT_API_PASSWORD,
+            "IP_Address": settings.FLIGHT_API_IP_ADDRESS,
+            "Request_Id": request_id,
+            "IMEI_Number": settings.FLIGHT_API_IMEI
+        }
+
+        payload = {
+            "Auth_Header": auth_header,
+            "Booking_RefNo": booking_ref_no,
+            "Airline_PNR": airline_pnr or ""
+        }
+
+        masked_payload = payload.copy()
+        masked_payload["Auth_Header"] = auth_header.copy()
+        masked_payload["Auth_Header"]["Password"] = "********"
+        logger.info(f"Outgoing FlyShop GetPostSSR Request [ID: {request_id}]: {masked_payload}")
+
+        try:
+            response = requests.post(endpoint, json=payload, timeout=60)
+            response.raise_for_status()
+            response_json = response.json()
+        except requests.RequestException as e:
+            logger.error(f"HTTP Connection failure to FlyShop GetPostSSR [ID: {request_id}]: {str(e)}")
+            raise ProviderAPIException("Unable to connect to the external flight service provider.")
+        except ValueError:
+            logger.error(f"Invalid JSON response returned from FlyShop GetPostSSR [ID: {request_id}]")
+            raise ProviderAPIException("Received invalid response from the flight service provider.")
+
+        logger.info(f"Incoming FlyShop GetPostSSR Response [ID: {request_id}] status_code={response.status_code}")
+
+        response_header = response_json.get('Response_Header', {})
+        error_code = response_header.get('Error_Code', '0000')
+        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+
+        if error_code != '0000' and error_code != '000':
+            logger.error(f"FlyShop GetPostSSR failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
+            raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
+
+        return response_json
+
+    @classmethod
+    def initiate_post_ssr(cls, booking_ref_no, booking_ssr_details, airline_pnr=None, request_id=None):
+        """
+        Initiates the addition of selected SSRs for passengers in GDS.
+        """
+        base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
+        endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_InitiatePostSSR"
+
+        if not request_id:
+            request_id = cls.generate_request_id()
+
+        auth_header = {
+            "UserId": settings.FLIGHT_API_USER_ID,
+            "Password": settings.FLIGHT_API_PASSWORD,
+            "IP_Address": settings.FLIGHT_API_IP_ADDRESS,
+            "Request_Id": request_id,
+            "IMEI_Number": settings.FLIGHT_API_IMEI
+        }
+
+        payload = {
+            "Auth_Header": auth_header,
+            "Booking_RefNo": booking_ref_no,
+            "Airline_PNR": airline_pnr or "",
+            "BookingSSRDetails": booking_ssr_details
+        }
+
+        masked_payload = payload.copy()
+        masked_payload["Auth_Header"] = auth_header.copy()
+        masked_payload["Auth_Header"]["Password"] = "********"
+        logger.info(f"Outgoing FlyShop InitiatePostSSR Request [ID: {request_id}]: {masked_payload}")
+
+        try:
+            response = requests.post(endpoint, json=payload, timeout=60)
+            response.raise_for_status()
+            response_json = response.json()
+        except requests.RequestException as e:
+            logger.error(f"HTTP Connection failure to FlyShop InitiatePostSSR [ID: {request_id}]: {str(e)}")
+            raise ProviderAPIException("Unable to connect to the external flight service provider.")
+        except ValueError:
+            logger.error(f"Invalid JSON response returned from FlyShop InitiatePostSSR [ID: {request_id}]")
+            raise ProviderAPIException("Received invalid response from the flight service provider.")
+
+        logger.info(f"Incoming FlyShop InitiatePostSSR Response [ID: {request_id}] status_code={response.status_code}")
+
+        response_header = response_json.get('Response_Header', {})
+        error_code = response_header.get('Error_Code', '0000')
+        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+
+        if error_code != '0000' and error_code != '000':
+            logger.error(f"FlyShop InitiatePostSSR failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
+            raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
+
+        return True
+
+    @classmethod
+    def confirm_post_ssr(cls, booking_ref_no, booking_ssr_details, airline_pnr=None, request_id=None):
+        """
+        Confirms the added SSRs for passengers in GDS.
+        """
+        base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
+        endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_ConfirmPostSSR"
+
+        if not request_id:
+            request_id = cls.generate_request_id()
+
+        auth_header = {
+            "UserId": settings.FLIGHT_API_USER_ID,
+            "Password": settings.FLIGHT_API_PASSWORD,
+            "IP_Address": settings.FLIGHT_API_IP_ADDRESS,
+            "Request_Id": request_id,
+            "IMEI_Number": settings.FLIGHT_API_IMEI
+        }
+
+        payload = {
+            "Auth_Header": auth_header,
+            "Booking_RefNo": booking_ref_no,
+            "Airline_PNR": airline_pnr or "",
+            "BookingSSRDetails": booking_ssr_details
+        }
+
+        masked_payload = payload.copy()
+        masked_payload["Auth_Header"] = auth_header.copy()
+        masked_payload["Auth_Header"]["Password"] = "********"
+        logger.info(f"Outgoing FlyShop ConfirmPostSSR Request [ID: {request_id}]: {masked_payload}")
+
+        try:
+            response = requests.post(endpoint, json=payload, timeout=60)
+            response.raise_for_status()
+            response_json = response.json()
+        except requests.RequestException as e:
+            logger.error(f"HTTP Connection failure to FlyShop ConfirmPostSSR [ID: {request_id}]: {str(e)}")
+            raise ProviderAPIException("Unable to connect to the external flight service provider.")
+        except ValueError:
+            logger.error(f"Invalid JSON response returned from FlyShop ConfirmPostSSR [ID: {request_id}]")
+            raise ProviderAPIException("Received invalid response from the flight service provider.")
+
+        logger.info(f"Incoming FlyShop ConfirmPostSSR Response [ID: {request_id}] status_code={response.status_code}")
+
+        response_header = response_json.get('Response_Header', {})
+        error_code = response_header.get('Error_Code', '0000')
+        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+
+        if error_code != '0000' and error_code != '000':
+            logger.error(f"FlyShop ConfirmPostSSR failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
+            raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
+
         return True
 
     @classmethod
@@ -604,6 +967,9 @@ class ProviderService:
             seats_available = fare.get('Seats_Available', '')
             food_onboard = fare.get('Food_onboard', 'F')
             gst_mandatory = fare.get('GSTMandatory', False)
+            product_class = fare.get('ProductClass', '') or ''
+            fare_basis = ""
+            class_desc = ""
 
             raw_details_list = fare.get('FareDetails', [])
             price_details = {
@@ -630,6 +996,30 @@ class ProviderService:
                     "check_in": raw_baggage.get('Check_In_Baggage'),
                     "hand": raw_baggage.get('Hand_Baggage')
                 }
+                fare_classes = detail.get('FareClasses', [])
+                if fare_classes:
+                    fare_basis = fare_classes[0].get('FareBasis', '') or ''
+                    class_desc = fare_classes[0].get('Class_Desc', '') or ''
+
+            # Map GDS flags: SF -> STU, DD -> DEF, CP -> CORP, otherwise fallback to description checks
+            product_class_upper = product_class.upper()
+            if product_class_upper == 'SF':
+                fare_type_str = 'STU'
+            elif product_class_upper == 'DD':
+                fare_type_str = 'DEF'
+            elif product_class_upper == 'CP':
+                fare_type_str = 'CORP'
+            else:
+                class_desc_upper = class_desc.upper()
+                fare_basis_upper = fare_basis.upper()
+                if 'STU' in class_desc_upper or 'STUDENT' in class_desc_upper or 'SF' in class_desc_upper or 'USPF' in fare_basis_upper:
+                    fare_type_str = 'STU'
+                elif 'DEF' in class_desc_upper or 'DEFENCE' in class_desc_upper or 'MILITARY' in class_desc_upper or 'DD' in class_desc_upper:
+                    fare_type_str = 'DEF'
+                elif 'CORP' in class_desc_upper or 'CP' in class_desc_upper:
+                    fare_type_str = 'CORP'
+                else:
+                    fare_type_str = 'PUB'
 
             normalized_fares.append({
                 "fare_id": fare_id,
@@ -638,7 +1028,11 @@ class ProviderService:
                 "food_onboard": food_onboard,
                 "gst_mandatory": gst_mandatory,
                 "price_details": price_details,
-                "baggage": baggage_details
+                "baggage": baggage_details,
+                "fare_type": fare_type_str,
+                "product_class": product_class,
+                "fare_basis": fare_basis,
+                "class_desc": class_desc
             })
 
         return {

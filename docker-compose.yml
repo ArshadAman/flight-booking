@@ -20,6 +20,8 @@ services:
   web:
     build: .
     command: sh -c "python manage.py collectstatic --noinput && python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8001:8000"
     volumes:
       - .:/app
       - static_volume:/app/staticfiles
@@ -46,7 +48,7 @@ services:
 
   nginx:
     image: nginx:1.25-alpine
-    restart: always
+    restart: no
     ports:
       - "80:80"
       - "443:443"
@@ -60,7 +62,7 @@ services:
 
   certbot:
     image: certbot/certbot
-    restart: always
+    restart: no
     volumes:
       - ./data/certbot/conf:/etc/letsencrypt
       - ./data/certbot/www:/var/www/certbot
@@ -68,7 +70,7 @@ services:
 
   tunnel:
     image: cloudflare/cloudflared:latest
-    entrypoint: ["cloudflared", "tunnel", "--no-autoupdate", "--url", "http://web:8000"]
+    entrypoint: [ "cloudflared", "tunnel", "--no-autoupdate", "--url", "http://web:8000" ]
     restart: always
     depends_on:
       - web
@@ -76,7 +78,4 @@ services:
 volumes:
   postgres_data:
   static_volume:
-
-
-
 

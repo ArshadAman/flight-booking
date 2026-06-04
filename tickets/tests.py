@@ -36,6 +36,7 @@ class TicketAPITests(APITestCase):
             user=self.customer_a,
             pnr_number='PNRA12',
             ticket_number='TKT-12345',
+            booking_ref='FBB64ZDT',
             status='CONFIRMED',
             origin='DEL',
             destination='BOM',
@@ -312,6 +313,149 @@ class TicketAPITests(APITestCase):
         self.assertEqual(ticket_in_db.passengers_data[0]['first_name'], 'John')
 
     @patch('flights.services.requests.post')
+    def test_successful_ticket_buy_student_defence_flow(self, mock_post):
+        """
+        Verify that a ticket purchase with student and defence credentials:
+        - Works successfully.
+        - Outgoing TempBooking GDS request contains Student_Id, DefenceServiceId, DefenceIssueDate, and DefenceExpiryDate.
+        - Local Ticket database record saves student_id, defence_service_id, etc.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        buy_url = reverse('ticket-buy')
+
+        payload = {
+            "search_key": "mock_search_token",
+            "flight_key": "mock_flight_key",
+            "fare_id": "4908357683079097850",
+            "customer_mobile": "1234567890",
+            "passenger_mobile": "1234567890",
+            "passenger_email": "passenger@example.com",
+            "passengers": [
+                {
+                    "pax_type": 0,
+                    "title": "Mr",
+                    "first_name": "John",
+                    "last_name": "Doe",
+                    "gender": 0,
+                    "dob": "1996-05-15",
+                    "passport_number": None,
+                    "pancard_number": None,
+                    "student_id": "ST123",
+                    "defence_service_id": "DEF789",
+                    "defence_issue_date": "2020-01-01",
+                    "defence_expiry_date": "2030-01-01"
+                }
+            ]
+        }
+
+        mock_reprice_resp = MagicMock()
+        mock_reprice_resp.status_code = 200
+        mock_reprice_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "0000", "Error_Desc": "SUCCESS"},
+            "AirRepriceResponses": [
+                {
+                    "IsFareChange": False,
+                    "Flight": {
+                        "Airline_Code": "SG",
+                        "Block_Ticket_Allowed": True,
+                        "Cached": False,
+                        "Destination": "BOM",
+                        "Flight_Key": "mock_flight_key_repriced",
+                        "Origin": "DEL",
+                        "Repriced": True,
+                        "Segments": [
+                            {
+                                "Segment_Id": 0,
+                                "Airline_Code": "SG",
+                                "Airline_Name": "SpiceJet",
+                                "Flight_Number": "6287",
+                                "Aircraft_Type": "737",
+                                "Origin": "DEL",
+                                "Origin_City": "DELHI",
+                                "Destination": "BOM",
+                                "Destination_City": "MUMBAI",
+                                "Departure_DateTime": "06/15/2026 00:50",
+                                "Arrival_DateTime": "06/15/2026 02:40",
+                                "Duration": "01:50",
+                                "Return_Flight": False
+                            }
+                        ],
+                        "Fares": [
+                            {
+                                "Fare_Id": "4908357683079097850",
+                                "Refundable": True,
+                                "Seats_Available": "9",
+                                "Food_onboard": "F",
+                                "GSTMandatory": False,
+                                "FareDetails": [
+                                    {
+                                        "AirportTax_Amount": 679.0,
+                                        "Basic_Amount": 4226.0,
+                                        "Currency_Code": "INR",
+                                        "Total_Amount": 4905.0,
+                                        "Free_Baggage": {
+                                            "Check_In_Baggage": "15 KG",
+                                            "Hand_Baggage": "7 KG"
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+        mock_temp_resp = MagicMock()
+        mock_temp_resp.status_code = 200
+        mock_temp_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "0000", "Error_Desc": "SUCCESS"},
+            "Booking_RefNo": "FBB64ZDT"
+        }
+
+        mock_ticket_resp = MagicMock()
+        mock_ticket_resp.status_code = 200
+        mock_ticket_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "0000", "Error_Desc": "SUCCESS"},
+            "Booking_RefNo": "FBB64ZDT",
+            "AirlinePNRDetails": [
+                {
+                    "AirlinePNRs": [
+                        {
+                            "Airline_Code": "SG",
+                            "Airline_PNR": "KEVG6H",
+                            "Record_Locator": "210908133015"
+                        }
+                    ],
+                    "Flight_Id": "5416863216316396891",
+                    "Status_Id": "11"
+                }
+            ]
+        }
+
+        mock_post.side_effect = [mock_reprice_resp, mock_temp_resp, mock_ticket_resp]
+
+        response = self.client.post(buy_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        self.assertEqual(mock_post.call_count, 3)
+        temp_booking_args = mock_post.call_args_list[1]
+        temp_booking_kwargs = temp_booking_args[1]
+        temp_booking_payload = temp_booking_kwargs.get('json', {})
+        
+        pax = temp_booking_payload.get('PAX_Details', [])[0]
+        self.assertEqual(pax.get('Student_Id'), 'ST123')
+        self.assertEqual(pax.get('DefenceServiceId'), 'DEF789')
+        self.assertEqual(pax.get('DefenceIssueDate'), '01/01/2020')
+        self.assertEqual(pax.get('DefenceExpiryDate'), '01/01/2030')
+
+        ticket_in_db = Ticket.objects.get(pnr_number='KEVG6H')
+        self.assertEqual(ticket_in_db.passengers_data[0]['student_id'], 'ST123')
+        self.assertEqual(ticket_in_db.passengers_data[0]['defence_service_id'], 'DEF789')
+        self.assertEqual(ticket_in_db.passengers_data[0]['defence_issue_date'], '2020-01-01')
+        self.assertEqual(ticket_in_db.passengers_data[0]['defence_expiry_date'], '2030-01-01')
+
+    @patch('flights.services.requests.post')
     def test_ticket_buy_flow_reprice_failure(self, mock_post):
         """
         Verify that if reprice fails, the flow terminates and no ticket is committed to DB.
@@ -422,4 +566,298 @@ class TicketAPITests(APITestCase):
             {"FlightId": "5416863216316396891", "PassengerId": "2", "SegmentId": "1"}
         ]
         self.assertEqual(cancel_details, expected_details)
+
+    @patch('flights.services.requests.post')
+    def test_get_ssr_options_success(self, mock_post):
+        """
+        Verify that retrieving available SSRs and seat maps returns the exact structure from GDS
+        when the ticket is confirmed.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        ssr_url = reverse('ticket-ssr', kwargs={'pk': self.ticket_a.id})
+
+        # Mock GetPostSSR response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "Response_Header": {"Error_Code": "0000", "Error_Desc": "SUCCESS"},
+            "AirSeatMaps": [
+                {
+                    "Flight_Id": "123",
+                    "Seat_Segments": []
+                }
+            ],
+            "SSRFlightDetails": [
+                {
+                    "SSRDetails": []
+                }
+            ]
+        }
+        mock_post.return_value = mock_response
+
+        response = self.client.get(ssr_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("AirSeatMaps", response.data)
+        self.assertIn("SSRFlightDetails", response.data)
+
+        # Verify outgoing request payload
+        mock_post.assert_called_once()
+        called_args, called_kwargs = mock_post.call_args
+        called_payload = called_kwargs.get('json', {})
+        self.assertEqual(called_payload.get('Booking_RefNo'), self.ticket_a.booking_ref)
+        self.assertEqual(called_payload.get('Airline_PNR'), self.ticket_a.pnr_number)
+
+    def test_get_ssr_options_unconfirmed_fails(self):
+        """
+        Verify that retrieving SSR options for an unconfirmed (e.g. pending) ticket fails with 400.
+        """
+        self.client.force_authenticate(user=self.customer_b)  # Customer B's ticket status is PENDING
+        ssr_url = reverse('ticket-ssr', kwargs={'pk': self.ticket_b.id})
+
+        response = self.client.get(ssr_url)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['detail'], "SSR options are only available for confirmed bookings.")
+
+    @patch('flights.services.requests.post')
+    def test_add_ssr_success(self, mock_post):
+        """
+        Verify that adding SSRs (Initiate then Confirm) is executed sequentially
+        and saves confirmed choices to ticket.ssr_data.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        add_ssr_url = reverse('ticket-ssr-add', kwargs={'pk': self.ticket_a.id})
+
+        # Mock initiate and confirm responses
+        mock_init_resp = MagicMock()
+        mock_init_resp.status_code = 200
+        mock_init_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "0000", "Error_Desc": "SUCCESS"}
+        }
+
+        mock_confirm_resp = MagicMock()
+        mock_confirm_resp.status_code = 200
+        mock_confirm_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "0000", "Error_Desc": "SUCCESS"}
+        }
+
+        mock_post.side_effect = [mock_init_resp, mock_confirm_resp]
+
+        payload = {
+            "BookingSSRDetails": [
+                {
+                    "Pax_Id": 1,
+                    "SSR_Key": "some_ssr_key_xyz"
+                }
+            ]
+        }
+
+        response = self.client.post(add_ssr_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Verify that calls to initiate and confirm are made
+        self.assertEqual(mock_post.call_count, 2)
+        
+        # Verify db record update
+        self.ticket_a.refresh_from_db()
+        self.assertEqual(self.ticket_a.ssr_data, payload)
+
+        # Verify returned JSON representation includes ssr_data
+        self.assertEqual(response.data['ssr_data'], payload)
+
+    def test_add_ssr_unconfirmed_fails(self):
+        """
+        Verify that adding SSRs to an unconfirmed ticket fails with 400.
+        """
+        self.client.force_authenticate(user=self.customer_b)
+        add_ssr_url = reverse('ticket-ssr-add', kwargs={'pk': self.ticket_b.id})
+
+        payload = {
+            "BookingSSRDetails": [
+                {
+                    "Pax_Id": 1,
+                    "SSR_Key": "some_ssr_key_xyz"
+                }
+            ]
+        }
+
+        response = self.client.post(add_ssr_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['detail'], "SSRs can only be added to confirmed bookings.")
+
+    @patch('flights.services.requests.post')
+    def test_add_ssr_gds_error(self, mock_post):
+        """
+        Verify that if GDS initiate or confirm fails, it returns 502 Bad Gateway.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        add_ssr_url = reverse('ticket-ssr-add', kwargs={'pk': self.ticket_a.id})
+
+        # Mock initiate failure
+        mock_init_resp = MagicMock()
+        mock_init_resp.status_code = 200
+        mock_init_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "E100", "Error_Desc": "Invalid SSR Key"}
+        }
+
+        mock_post.return_value = mock_init_resp
+
+        payload = {
+            "BookingSSRDetails": [
+                {
+                    "Pax_Id": 1,
+                    "SSR_Key": "some_ssr_key_xyz"
+                }
+            ]
+        }
+
+        response = self.client.post(add_ssr_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn("Failed to add SSR", response.data['detail'])
+
+    def test_get_ssr_options_unauthorized_fails(self):
+        """
+        Verify that a customer attempting to retrieve SSR options of a ticket owned by another user gets 404.
+        """
+        self.client.force_authenticate(user=self.customer_b)
+        ssr_url = reverse('ticket-ssr', kwargs={'pk': self.ticket_a.id})
+        response = self.client.get(ssr_url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_add_ssr_unauthorized_fails(self):
+        """
+        Verify that a customer attempting to add SSR to a ticket owned by another user gets 404.
+        """
+        self.client.force_authenticate(user=self.customer_b)
+        add_ssr_url = reverse('ticket-ssr-add', kwargs={'pk': self.ticket_a.id})
+        payload = {
+            "BookingSSRDetails": [
+                {
+                    "Pax_Id": 1,
+                    "SSR_Key": "some_ssr_key_xyz"
+                }
+            ]
+        }
+        response = self.client.post(add_ssr_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    @patch('flights.services.requests.post')
+    def test_get_ssr_gds_connection_failure(self, mock_post):
+        """
+        Verify that GDS connection failure during GET SSR returns 502 Bad Gateway.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        ssr_url = reverse('ticket-ssr', kwargs={'pk': self.ticket_a.id})
+        from requests.exceptions import RequestException
+        mock_post.side_effect = RequestException("Connection timeout")
+
+        response = self.client.get(ssr_url)
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn("Unable to connect", response.data['detail'])
+
+    @patch('flights.services.requests.post')
+    def test_get_ssr_gds_provider_error(self, mock_post):
+        """
+        Verify that if GDS returns a provider error during GET SSR, it returns 502 Bad Gateway.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        ssr_url = reverse('ticket-ssr', kwargs={'pk': self.ticket_a.id})
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "E999", "Error_Desc": "PNR not found or invalid"}
+        }
+        mock_post.return_value = mock_resp
+
+        response = self.client.get(ssr_url)
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn("Provider Error: PNR not found or invalid", response.data['detail'])
+
+    def test_add_ssr_invalid_payload_format(self):
+        """
+        Verify that sending malformed SSR details return 400 Bad Request.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        add_ssr_url = reverse('ticket-ssr-add', kwargs={'pk': self.ticket_a.id})
+
+        # Test empty body
+        response = self.client.post(add_ssr_url, {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['detail'], "BookingSSRDetails must be a non-empty list of selected SSRs.")
+
+        # Test list of non-dicts
+        response = self.client.post(add_ssr_url, {"BookingSSRDetails": ["not_a_dict"]}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['detail'], "Each SSR detail must contain 'Pax_Id' and 'SSR_Key'.")
+
+        # Test missing Pax_Id
+        response = self.client.post(add_ssr_url, {"BookingSSRDetails": [{"SSR_Key": "xyz"}]}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['detail'], "Each SSR detail must contain 'Pax_Id' and 'SSR_Key'.")
+
+    @patch('flights.services.requests.post')
+    def test_add_ssr_gds_connection_failure_on_confirm(self, mock_post):
+        """
+        Verify that connection failure on the second step (Confirm Post SSR) returns 502 Bad Gateway.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        add_ssr_url = reverse('ticket-ssr-add', kwargs={'pk': self.ticket_a.id})
+
+        mock_init_resp = MagicMock()
+        mock_init_resp.status_code = 200
+        mock_init_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "0000", "Error_Desc": "SUCCESS"}
+        }
+
+        from requests.exceptions import RequestException
+        mock_post.side_effect = [mock_init_resp, RequestException("Connection timeout")]
+
+        payload = {
+            "BookingSSRDetails": [
+                {
+                    "Pax_Id": 1,
+                    "SSR_Key": "some_ssr_key_xyz"
+                }
+            ]
+        }
+
+        response = self.client.post(add_ssr_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn("Failed to add SSR: Unable to connect", response.data['detail'])
+
+    @patch('flights.services.requests.post')
+    def test_add_ssr_gds_error_on_confirm(self, mock_post):
+        """
+        Verify that if GDS initiate succeeds but confirm fails, it returns 502 Bad Gateway.
+        """
+        self.client.force_authenticate(user=self.customer_a)
+        add_ssr_url = reverse('ticket-ssr-add', kwargs={'pk': self.ticket_a.id})
+
+        mock_init_resp = MagicMock()
+        mock_init_resp.status_code = 200
+        mock_init_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "0000", "Error_Desc": "SUCCESS"}
+        }
+
+        mock_confirm_resp = MagicMock()
+        mock_confirm_resp.status_code = 200
+        mock_confirm_resp.json.return_value = {
+            "Response_Header": {"Error_Code": "E101", "Error_Desc": "Invalid Passenger ID or SSR Mismatch"}
+        }
+
+        mock_post.side_effect = [mock_init_resp, mock_confirm_resp]
+
+        payload = {
+            "BookingSSRDetails": [
+                {
+                    "Pax_Id": 2,
+                    "SSR_Key": "some_ssr_key_xyz"
+                }
+            ]
+        }
+
+        response = self.client.post(add_ssr_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn("Failed to add SSR: Provider Error: Invalid Passenger ID or SSR Mismatch", response.data['detail'])
+
 

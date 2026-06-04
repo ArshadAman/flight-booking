@@ -156,6 +156,33 @@ class FlightSearchTests(APITestCase):
         self.assertEqual(fare['baggage']['check_in'], "15 KG")
 
     @patch('flights.services.requests.post')
+    def test_flight_search_student_defence_success(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "0000",
+                "Error_Desc": "SUCCESS",
+            },
+            "Search_Key": "mock_search_token_student_defence",
+            "TripDetails": []
+        }
+        mock_post.return_value = mock_response
+
+        payload = self.valid_payload.copy()
+        payload["student_fare_search"] = True
+        payload["defence_fare_search"] = True
+
+        response = self.client.post(self.search_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        mock_post.assert_called_once()
+        called_args, called_kwargs = mock_post.call_args
+        called_payload = called_kwargs.get('json', {})
+        self.assertTrue(called_payload.get("StudentFare_Search"))
+        self.assertTrue(called_payload.get("DefenceFare_Search"))
+
+    @patch('flights.services.requests.post')
     def test_flight_search_api_provider_failure(self, mock_post):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -279,3 +306,226 @@ class FlightSearchTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
         self.assertFalse(response.data['success'])
         self.assertIn("Provider Error: Fare Not Available", response.data['message'])
+
+    @patch('flights.services.requests.post')
+    def test_fare_type_normalization(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "0000",
+                "Error_Desc": "SUCCESS",
+            },
+            "Search_Key": "mock_search_token_12345",
+            "TripDetails": [
+                {
+                    "Flights": [
+                        {
+                            "Airline_Code": "6E",
+                            "Block_Ticket_Allowed": True,
+                            "Cached": False,
+                            "Destination": "BOM",
+                            "Segments": [
+                                {
+                                    "Segment_Id": 0,
+                                    "Airline_Code": "6E",
+                                    "Airline_Name": "IndiGo",
+                                    "Flight_Number": "101",
+                                    "Aircraft_Type": "A320",
+                                    "Origin": "DEL",
+                                    "Origin_City": "DELHI",
+                                    "Destination": "BOM",
+                                    "Destination_City": "MUMBAI",
+                                    "Departure_DateTime": "06/12/2026 00:50",
+                                    "Arrival_DateTime": "06/12/2026 02:40",
+                                    "Duration": "01:50",
+                                }
+                            ],
+                            "Fares": [
+                                {
+                                    "FareDetails": [
+                                        {
+                                            "AirportTax_Amount": 500,
+                                            "Basic_Amount": 3000,
+                                            "Currency_Code": "INR",
+                                            "Total_Amount": 3500,
+                                            "Free_Baggage": {"Check_In_Baggage": "15 KG"},
+                                            "FareClasses": [
+                                                {
+                                                    "Class_Code": "U",
+                                                    "Class_Desc": "SF",
+                                                    "FareBasis": "USPF"
+                                                }
+                                            ]
+                                        }
+                                    ],
+                                    "FareType": 0,
+                                    "Fare_Id": "fare_student",
+                                    "ProductClass": "SF",
+                                    "Food_onboard": "F",
+                                    "GSTMandatory": False,
+                                    "Refundable": True,
+                                    "Seats_Available": "9"
+                                },
+                                {
+                                    "FareDetails": [
+                                        {
+                                            "AirportTax_Amount": 500,
+                                            "Basic_Amount": 3000,
+                                            "Currency_Code": "INR",
+                                            "Total_Amount": 3500,
+                                            "Free_Baggage": {"Check_In_Baggage": "15 KG"},
+                                            "FareClasses": [
+                                                {
+                                                    "Class_Code": "V",
+                                                    "Class_Desc": "MILITARY",
+                                                    "FareBasis": "VDEF"
+                                                }
+                                            ]
+                                        }
+                                    ],
+                                    "FareType": 0,
+                                    "Fare_Id": "fare_defence",
+                                    "ProductClass": "DD",
+                                    "Food_onboard": "F",
+                                    "GSTMandatory": False,
+                                    "Refundable": True,
+                                    "Seats_Available": "9"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+        mock_post.return_value = mock_response
+
+        response = self.client.post(self.search_url, self.valid_payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        fares = response.data['flights'][0]['fares']
+        self.assertEqual(len(fares), 2)
+        
+        # Verify student fare mapping
+        self.assertEqual(fares[0]['fare_id'], "fare_student")
+        self.assertEqual(fares[0]['fare_type'], "STU")
+        self.assertEqual(fares[0]['product_class'], "SF")
+        self.assertEqual(fares[0]['class_desc'], "SF")
+        self.assertEqual(fares[0]['fare_basis'], "USPF")
+        
+        # Verify defence fare mapping
+        self.assertEqual(fares[1]['fare_id'], "fare_defence")
+        self.assertEqual(fares[1]['fare_type'], "DEF")
+        self.assertEqual(fares[1]['product_class'], "DD")
+
+
+class FlightSSRTests(APITestCase):
+    def setUp(self):
+        self.ssr_url = reverse('flight_ssr')
+        self.payload = {
+            "search_key": "mock_search_token_12345",
+            "flight_key": "mock_flight_key_12345"
+        }
+
+    @patch('flights.services.requests.post')
+    def test_get_ssr_options_success(self, mock_post):
+        # We mock two responses because get_pre_ssr calls requests.post twice:
+        # first to Air_GetSSR, second to Air_GetSeatMap.
+        mock_response_ssr = MagicMock()
+        mock_response_ssr.status_code = 200
+        mock_response_ssr.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "0000",
+                "Error_Desc": "SUCCESS"
+            },
+            "SSRFlightDetails": [
+                {
+                    "SSRDetails": [
+                        {
+                            "SSR_Code": "VGML",
+                            "SSR_TypeName": "MEALS",
+                            "SSR_TypeDesc": "Veg Meal",
+                            "Total_Amount": 250
+                        }
+                    ]
+                }
+            ]
+        }
+
+        mock_response_seat = MagicMock()
+        mock_response_seat.status_code = 200
+        mock_response_seat.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "0000",
+                "Error_Desc": "SUCCESS"
+            },
+            "AirSeatMaps": [
+                {
+                    "Flight_Id": "mock_flight_key_12345",
+                    "Seat_Segments": []
+                }
+            ]
+        }
+
+        # side_effect returns mock_response_ssr on the first call, mock_response_seat on the second call.
+        mock_post.side_effect = [mock_response_ssr, mock_response_seat]
+
+        response = self.client.post(self.ssr_url, self.payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        # Verify the structure contains both merged lists
+        self.assertIn("SSRFlightDetails", response.data)
+        self.assertIn("AirSeatMaps", response.data)
+        self.assertEqual(len(response.data["SSRFlightDetails"]), 1)
+        self.assertEqual(len(response.data["AirSeatMaps"]), 1)
+        self.assertEqual(response.data["SSRFlightDetails"][0]["SSRDetails"][0]["SSR_Code"], "VGML")
+        self.assertEqual(response.data["AirSeatMaps"][0]["Flight_Id"], "mock_flight_key_12345")
+
+    @patch('flights.services.requests.post')
+    def test_get_ssr_options_seat_map_graceful_degradation(self, mock_post):
+        # If the seat map service fails or returns an error, we should degrade gracefully and return empty AirSeatMaps.
+        mock_response_ssr = MagicMock()
+        mock_response_ssr.status_code = 200
+        mock_response_ssr.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "0000",
+                "Error_Desc": "SUCCESS"
+            },
+            "SSRFlightDetails": [
+                {
+                    "SSRDetails": [
+                        {
+                            "SSR_Code": "VGML",
+                            "SSR_TypeName": "MEALS"
+                        }
+                    ]
+                }
+            ]
+        }
+
+        mock_response_seat = MagicMock()
+        mock_response_seat.status_code = 200
+        mock_response_seat.json.return_value = {
+            "Response_Header": {
+                "Error_Code": "E100",
+                "Error_Desc": "Seat map not available"
+            }
+        }
+
+        mock_post.side_effect = [mock_response_ssr, mock_response_seat]
+
+        response = self.client.post(self.ssr_url, self.payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        # AirSeatMaps must be empty list rather than breaking the request
+        self.assertEqual(response.data["AirSeatMaps"], [])
+        self.assertEqual(len(response.data["SSRFlightDetails"]), 1)
+
+    @patch('flights.services.requests.post')
+    def test_get_ssr_options_validation_error(self, mock_post):
+        # Test validation error when missing flight_key or search_key
+        payload = {"search_key": "mock_search_token_12345"}
+        response = self.client.post(self.ssr_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+

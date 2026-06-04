@@ -59,3 +59,29 @@ class FlightRevalidateView(views.APIView):
             data=revalidate_result,
             status=status.HTTP_200_OK
         )
+
+
+class FlightSSRView(views.APIView):
+    """
+    Retrieves pre-booking SSR options (seat maps, meals, baggage, wheelchair) for a selected flight.
+    """
+    permission_classes = (permissions.AllowAny,)
+
+    def post(self, request, *args, **kwargs):
+        search_key = request.data.get('search_key')
+        flight_key = request.data.get('flight_key')
+        if not search_key or not flight_key:
+            return Response(
+                {"detail": "search_key and flight_key are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            ssr_options = ProviderService.get_pre_ssr(search_key, flight_key)
+        except ProviderAPIException as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+
+        return Response(ssr_options, status=status.HTTP_200_OK)

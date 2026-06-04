@@ -1,6 +1,20 @@
 from rest_framework import serializers
 from datetime import date
 
+
+class TripSegmentSerializer(serializers.Serializer):
+    """One leg of a multi-city itinerary."""
+    origin = serializers.CharField(max_length=3, min_length=3)
+    destination = serializers.CharField(max_length=3, min_length=3)
+    travel_date = serializers.DateField()
+
+    def validate_origin(self, value):
+        return value.strip().upper()
+
+    def validate_destination(self, value):
+        return value.strip().upper()
+
+
 class FlightSearchRequestSerializer(serializers.Serializer):
     CLASS_ECONOMY = '0'
     CLASS_PREMIUM_ECONOMY = '1'
@@ -25,12 +39,25 @@ class FlightSearchRequestSerializer(serializers.Serializer):
         help_text="3-letter IATA code for the arrival airport, e.g., 'BOM'."
     )
     travel_date = serializers.DateField(
-        help_text="Date of travel in YYYY-MM-DD format."
+        required=False,
+        allow_null=True,
+        help_text="Date of travel in YYYY-MM-DD format. Not required for multi-city."
     )
     return_date = serializers.DateField(
         required=False,
         allow_null=True,
         help_text="Date of return in YYYY-MM-DD format. Triggers round-trip search if provided."
+    )
+    travel_type = serializers.IntegerField(
+        required=False,
+        default=0,
+        help_text="0=One-Way, 1=Round-Trip, 2=Multi-City."
+    )
+    trip_segments = TripSegmentSerializer(
+        many=True,
+        required=False,
+        default=list,
+        help_text="List of legs for multi-city searches. Requires travel_type=2."
     )
     adult_count = serializers.IntegerField(
         min_value=1,
@@ -61,6 +88,16 @@ class FlightSearchRequestSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="Filter results by specific airline carrier code, e.g., '6E'."
     )
+    student_fare_search = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Whether to search specifically for student fare discounts."
+    )
+    defence_fare_search = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Whether to search specifically for defence/military/airforce discounts."
+    )
 
     def validate_origin(self, value):
         return value.strip().upper()
@@ -74,28 +111,46 @@ class FlightSearchRequestSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
+        travel_type = attrs.get('travel_type', 0)
         origin = attrs.get('origin')
         destination = attrs.get('destination')
         travel_date = attrs.get('travel_date')
         return_date = attrs.get('return_date')
+        trip_segments = attrs.get('trip_segments', [])
         infants = attrs.get('infant_count', 0)
         adults = attrs.get('adult_count', 1)
 
-        # Origin and Destination must differ
-        if origin == destination:
-            raise serializers.ValidationError(
-                {"destination": "Origin and Destination airports cannot be the same."}
-            )
-
-        # Travel date must be in the future or today
-        if travel_date < date.today():
-            raise serializers.ValidationError(
-                {"travel_date": "Travel date cannot be in the past."}
-            )
-
-        # Return date validation
-        if return_date:
-            if return_date < travel_date:
+        if travel_type == 2:
+            # Multi-city: require at least 2 segments
+            if len(trip_segments) < 2:
+                raise serializers.ValidationError(
+                    {"trip_segments": "Multi-city search requires at least 2 trip segments."}
+                )
+            for idx, seg in enumerate(trip_segments):
+                if seg['origin'] == seg['destination']:
+                    raise serializers.ValidationError(
+                        {"trip_segments": f"Segment {idx + 1}: origin and destination cannot be the same."}
+                    )
+                seg_date = seg.get('travel_date')
+                if seg_date and seg_date < date.today():
+                    raise serializers.ValidationError(
+                        {"trip_segments": f"Segment {idx + 1}: travel date cannot be in the past."}
+                    )
+        else:
+            # One-way / Round-trip: require standard fields
+            if not origin or not destination:
+                raise serializers.ValidationError(
+                    {"origin": "Origin and Destination are required for one-way or round-trip searches."}
+                )
+            if origin == destination:
+                raise serializers.ValidationError(
+                    {"destination": "Origin and Destination airports cannot be the same."}
+                )
+            if travel_date and travel_date < date.today():
+                raise serializers.ValidationError(
+                    {"travel_date": "Travel date cannot be in the past."}
+                )
+            if return_date and travel_date and return_date < travel_date:
                 raise serializers.ValidationError(
                     {"return_date": "Return date must be on or after the travel date."}
                 )
@@ -186,6 +241,11 @@ class FareSerializer(serializers.Serializer):
     gst_mandatory = serializers.BooleanField()
     price_details = PriceDetailsSerializer()
     baggage = BaggageSerializer()
+    fare_type = serializers.CharField(max_length=32, required=False, allow_blank=True, default="PUB")
+    product_class = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    fare_basis = serializers.CharField(max_length=128, required=False, allow_blank=True)
+    class_desc = serializers.CharField(max_length=128, required=False, allow_blank=True)
+
 
 
 class FlightSerializer(serializers.Serializer):
