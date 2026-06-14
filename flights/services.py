@@ -23,6 +23,93 @@ class ProviderService:
         return "".join([str(random.randint(0, 9)) for _ in range(25)])
 
     @classmethod
+    def format_local_flight(cls, lf, is_return=False):
+        segs = []
+        if lf.segments:
+            for idx, s in enumerate(lf.segments):
+                segs.append({
+                    "Segment_Id": s.get('segment_id', idx),
+                    "Airline_Code": s.get('airline_code', lf.airline_code),
+                    "Airline_Name": s.get('airline_name', lf.airline_name),
+                    "Flight_Number": s.get('flight_number', lf.flight_number),
+                    "Aircraft_Type": s.get('aircraft_type', 'Airbus A320'),
+                    "Origin": s.get('origin', lf.origin),
+                    "Origin_City": s.get('origin_city', ''),
+                    "Origin_Terminal": s.get('origin_terminal', 'Terminal 3'),
+                    "Destination": s.get('destination', lf.destination),
+                    "Destination_City": s.get('destination_city', ''),
+                    "Destination_Terminal": s.get('destination_terminal', 'Terminal 3'),
+                    "Departure_DateTime": s.get('departure_datetime', lf.departure_datetime.isoformat()),
+                    "Arrival_DateTime": s.get('arrival_datetime', lf.arrival_datetime.isoformat()),
+                    "Duration": s.get('duration', lf.duration),
+                    "Stop_Over": s.get('stop_over', None),
+                    "Return_Flight": is_return
+                })
+        else:
+            segs.append({
+                "Segment_Id": 0,
+                "Airline_Code": lf.airline_code,
+                "Airline_Name": lf.airline_name,
+                "Flight_Number": lf.flight_number,
+                "Aircraft_Type": "Airbus A320",
+                "Origin": lf.origin,
+                "Origin_City": "",
+                "Origin_Terminal": "Terminal 3",
+                "Destination": lf.destination,
+                "Destination_City": "",
+                "Destination_Terminal": "Terminal 3",
+                "Departure_DateTime": lf.departure_datetime.isoformat(),
+                "Arrival_DateTime": lf.arrival_datetime.isoformat(),
+                "Duration": lf.duration,
+                "Stop_Over": None,
+                "Return_Flight": is_return
+            })
+            
+        fare_details = {
+            "Currency_Code": "INR",
+            "Basic_Amount": float(lf.price),
+            "AirportTax_Amount": 0.0,
+            "Total_Amount": float(lf.price),
+            "Free_Baggage": {
+                "Check_In_Baggage": lf.baggage_check_in,
+                "Hand_Baggage": lf.baggage_hand
+            },
+            "FareClasses": [
+                {
+                    "FareBasis": "E",
+                    "Class_Desc": "Economy"
+                }
+            ]
+        }
+        
+        return {
+            "flight_key": f"local-{lf.id}",
+            "id": f"local-{lf.id}",
+            "Airline_Code": lf.airline_code,
+            "Airline_Name": lf.airline_name,
+            "Flight_Number": lf.flight_number,
+            "Origin": lf.origin,
+            "Destination": lf.destination,
+            "Departure_DateTime": lf.departure_datetime.isoformat(),
+            "Arrival_DateTime": lf.arrival_datetime.isoformat(),
+            "Duration": lf.duration,
+            "is_agent_flight": True,
+            "agent_flight_id": lf.id,
+            "Segments": segs,
+            "Fares": [
+                {
+                    "Fare_Id": f"local-{lf.id}-fare",
+                    "Refundable": lf.is_refundable,
+                    "Seats_Available": str(lf.seats_available),
+                    "Food_onboard": "F",
+                    "GSTMandatory": False,
+                    "ProductClass": "PUB",
+                    "FareDetails": [fare_details]
+                }
+            ]
+        }
+
+    @classmethod
     def search_flights(cls, validated_data):
         """
         Communicates with the external FlyShop UAT API, normalizes the response,
@@ -45,10 +132,7 @@ class ProviderService:
         student_fare_search = validated_data.get('student_fare_search', False)
         defence_fare_search = validated_data.get('defence_fare_search', False)
 
-        # Generate unique request trace id
         request_id = cls.generate_request_id()
-
-        # Build auth header
         auth_header = {
             "UserId": settings.FLIGHT_API_USER_ID,
             "Password": settings.FLIGHT_API_PASSWORD,
@@ -146,6 +230,63 @@ class ProviderService:
         search_key = response_json.get('Search_Key')
         raw_trip_details = response_json.get('TripDetails', [])
 
+        # Fetch local inventory flights and merge them
+        try:
+            from flights.models import FlightInventory
+            from datetime import timedelta
+            import datetime as dt_module
+            
+            # Query a 3-day range of departure dates in database to account for any timezone rollover
+            local_outbound_qs = FlightInventory.objects.filter(
+                origin=origin,
+                destination=destination,
+                departure_datetime__date__range=[travel_date - timedelta(days=1), travel_date + timedelta(days=1)]
+            )
+            
+            local_return_qs = []
+            if return_date:
+                local_return_qs = FlightInventory.objects.filter(
+                    origin=destination,
+                    destination=origin,
+                    departure_datetime__date__range=[return_date - timedelta(days=1), return_date + timedelta(days=1)]
+                )
+                
+            # Filter the queryset in python using local timezone offset (IST: +5:30)
+            matching_outbound = []
+            for lf in local_outbound_qs:
+                local_dep = lf.departure_datetime + dt_module.timedelta(hours=5, minutes=30)
+                if local_dep.date() == travel_date:
+                    matching_outbound.append(lf)
+                    
+            matching_return = []
+            for lf in local_return_qs:
+                local_dep = lf.departure_datetime + dt_module.timedelta(hours=5, minutes=30)
+                if local_dep.date() == return_date:
+                    matching_return.append(lf)
+                
+            local_outbound_raw = [cls.format_local_flight(lf, is_return=False) for lf in matching_outbound]
+            local_return_raw = [cls.format_local_flight(lf, is_return=True) for lf in matching_return]
+            
+            if not raw_trip_details:
+                raw_trip_details = [{"Trip_Id": 0, "Flights": []}]
+                if return_date:
+                    raw_trip_details.append({"Trip_Id": 1, "Flights": []})
+                    
+            if raw_trip_details:
+                outbound_trip = raw_trip_details[0]
+                if 'Flights' not in outbound_trip:
+                    outbound_trip['Flights'] = []
+                outbound_trip['Flights'].extend(local_outbound_raw)
+                
+                if len(raw_trip_details) > 1 and local_return_raw:
+                    return_trip = raw_trip_details[1]
+                    if 'Flights' not in return_trip:
+                        return_trip['Flights'] = []
+                    return_trip['Flights'].extend(local_return_raw)
+                    
+        except Exception as local_err:
+            logger.error(f"Failed to query/merge local inventory flights: {str(local_err)}")
+
         normalized_flights = cls._normalize_trip_details(raw_trip_details)
 
         return {
@@ -158,6 +299,26 @@ class ProviderService:
         """
         Revalidates a selected flight and fare against the provider before booking.
         """
+        flight_key = validated_data.get('flight_key', '')
+        if flight_key and flight_key.startswith("local-"):
+            try:
+                local_id = flight_key.replace("local-", "")
+                from flights.models import FlightInventory
+                lf = FlightInventory.objects.get(id=local_id)
+            except (IndexError, ValueError, FlightInventory.DoesNotExist):
+                raise ProviderAPIException("Selected local flight inventory not found.")
+            
+            raw_local = cls.format_local_flight(lf, is_return=False)
+            normalized = cls._normalize_flight(raw_local)
+            return {
+                "search_key": validated_data.get('search_key'),
+                "flight_key": flight_key,
+                "fare_id": validated_data.get('fare_id'),
+                "repriced": True,
+                "is_fare_change": False,
+                "flight": normalized,
+            }
+
         base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
         endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_Reprice"
 
@@ -234,6 +395,11 @@ class ProviderService:
         Submits a temporary booking request to FlyShop to reserve seats.
         Returns the generated Booking_RefNo.
         """
+        flight_key = validated_data.get('flight_key', '')
+        if flight_key and flight_key.startswith("local-"):
+            booking_ref = f"FBA{random.randint(100000, 999999)}"
+            return booking_ref, request_id
+
         base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
         endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_TempBooking"
 
@@ -413,45 +579,86 @@ class ProviderService:
         reprice_result = cls.reprice_flight(validated_data, request_id=request_id)
         
         # Update flight_key to the newly revalidated one!
-        validated_data['flight_key'] = reprice_result.get('flight_key')
+        flight_key = reprice_result.get('flight_key')
+        validated_data['flight_key'] = flight_key
+        
+        is_local = flight_key and flight_key.startswith("local-")
+        local_flight_obj = None
 
-        # Step 2: Temporary Seat Reservation
-        logger.info(f"Orchestrating Buy Ticket: Step 2 (Temp Booking) [ID: {request_id}]")
-        booking_ref, request_id = cls.temp_booking(validated_data, request_id=request_id)
+        if is_local:
+            booking_ref = f"FBA{random.randint(100000, 999999)}"
+            # Decrement seats in local inventory
+            try:
+                local_id = flight_key.replace("local-", "")
+                from flights.models import FlightInventory
+                lf = FlightInventory.objects.get(id=local_id)
+                local_flight_obj = lf
+                pax_count = len(validated_data.get('passengers', []))
+                if lf.seats_available >= pax_count:
+                    lf.seats_available -= pax_count
+                    lf.save()
+                else:
+                    raise ProviderAPIException("Not enough seats available in local flight inventory.")
+            except FlightInventory.DoesNotExist:
+                raise ProviderAPIException("Selected flight inventory does not exist.")
+            
+            pnr_details = []
+            pnr_number = None
+            ticket_number = None
+            flight_id = flight_key
+        else:
+            # Step 2: Temporary Seat Reservation
+            logger.info(f"Orchestrating Buy Ticket: Step 2 (Temp Booking) [ID: {request_id}]")
+            booking_ref, request_id = cls.temp_booking(validated_data, request_id=request_id)
 
-        # Introduce 5 seconds delay for GDS reservation stabilization
-        logger.info(f"Delaying ticketing request for 5 seconds to let GDS settle...")
-        time.sleep(5)
+            # Introduce 5 seconds delay for GDS reservation stabilization
+            logger.info(f"Delaying ticketing request for 5 seconds to let GDS settle...")
+            time.sleep(5)
 
-        # Step 3: Ticketing (Issuance)
-        logger.info(f"Orchestrating Buy Ticket: Step 3 (Ticketing) - Booking Ref: {booking_ref} [ID: {request_id}]")
-        pnr_details = cls.issue_ticket(booking_ref, request_id=request_id)
+            # Step 3: Ticketing (Issuance)
+            logger.info(f"Orchestrating Buy Ticket: Step 3 (Ticketing) - Booking Ref: {booking_ref} [ID: {request_id}]")
+            pnr_details = cls.issue_ticket(booking_ref, request_id=request_id)
+
+            pnr_number = None
+            ticket_number = None
+            flight_id = None
+            
+            if pnr_details:
+                pnrs = pnr_details[0].get('AirlinePNRs', [])
+                if pnrs:
+                    pnr_number = pnrs[0].get('Airline_PNR')
+                    ticket_number = pnrs[0].get('Record_Locator')
+                flight_id = pnr_details[0].get('Flight_Id')
 
         # Step 4: Extract and Normalize finalized values
-        pnr_number = None
-        ticket_number = None
-        flight_id = None
-        
-        if pnr_details:
-            pnrs = pnr_details[0].get('AirlinePNRs', [])
-            if pnrs:
-                pnr_number = pnrs[0].get('Airline_PNR')
-                ticket_number = pnrs[0].get('Record_Locator')
-            flight_id = pnr_details[0].get('Flight_Id')
-
         flight = reprice_result.get('flight', {})
         if not flight_id:
             flight_id = flight.get('flight_id')
 
-        if not pnr_number:
-            pnr_number = f"PNR{random.randint(10000, 99999)}"
-        if not ticket_number:
-            ticket_number = f"ETKT-{random.randint(1000000, 9999999)}"
+        if not is_local:
+            if not pnr_number:
+                pnr_number = f"PNR{random.randint(10000, 99999)}"
+            if not ticket_number:
+                ticket_number = f"ETKT-{random.randint(1000000, 9999999)}"
         segments = flight.get('segments', [])
         fares = flight.get('fares', [])
 
         primary_fare = fares[0] if fares else {}
-        price_details = primary_fare.get('price_details', {})
+        price_details = primary_fare.get('price_details', {}).copy()
+
+        if is_local and local_flight_obj:
+            try:
+                cabin = (local_flight_obj.cabin_class or "Economy").lower()
+                is_premium = "business" in cabin or "first" in cabin or "premium" in cabin
+                tax_rate = 0.12 if is_premium else 0.05
+                basic_pax = float(local_flight_obj.price)
+                tax_pax = round(basic_pax * tax_rate, 2)
+                total_pax = basic_pax + tax_pax
+                price_details["basic_amount"] = basic_pax
+                price_details["tax_amount"] = tax_pax
+                price_details["total_amount"] = total_pax
+            except Exception as e:
+                logger.error(f"Error calculating local ticket pricing: {e}")
         baggage = primary_fare.get('baggage', {})
 
         computed_origin = flight.get('origin')
@@ -472,7 +679,13 @@ class ProviderService:
                 try:
                     return timezone.make_aware(datetime.strptime(date_str, "%m/%d/%Y %H:%M"))
                 except:
-                    return timezone.now() + timezone.timedelta(days=10)
+                    try:
+                        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                        if timezone.is_naive(dt):
+                            return timezone.make_aware(dt)
+                        return dt
+                    except:
+                        return timezone.now() + timezone.timedelta(days=10)
 
             departure_dt = parse_uat_date(segments[0].get('departure_datetime'))
             arrival_dt = parse_uat_date(segments[-1].get('arrival_datetime'))
@@ -1036,8 +1249,8 @@ class ProviderService:
             })
 
         return {
-            "flight_key": flight.get('Flight_Key'),
-            "flight_id": flight.get('Flight_Id'),
+            "flight_key": flight.get('Flight_Key') or flight.get('flight_key'),
+            "flight_id": flight.get('Flight_Id') or flight.get('id'),
             "airline_code": airline_code,
             "origin": computed_origin,
             "destination": computed_destination,
@@ -1049,6 +1262,8 @@ class ProviderService:
             "has_more_class": flight.get('HasMoreClass', False),
             "inventory_type": flight.get('InventoryType'),
             "is_lcc": flight.get('IsLCC', False),
+            "is_agent_flight": flight.get('is_agent_flight', False),
+            "agent_flight_id": flight.get('agent_flight_id'),
             "segments": normalized_segments,
             "fares": normalized_fares
         }

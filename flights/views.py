@@ -4,10 +4,13 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample
 from .serializers import (
     FlightSearchRequestSerializer,
     FlightRevalidateRequestSerializer,
+    FlightInventoryCreateSerializer,
+    FlightInventoryResponseSerializer,
     SearchResponseSerializer,
     RevalidateResponseSerializer,
 )
-from .services import ProviderService
+from .models import FlightInventory
+from .services import ProviderService, ProviderAPIException
 
 class FlightSearchView(views.APIView):
     """
@@ -85,3 +88,54 @@ class FlightSSRView(views.APIView):
             )
 
         return Response(ssr_options, status=status.HTTP_200_OK)
+
+
+class FlightInventoryView(views.APIView):
+    """
+    Creates locally managed agent inventory flights used by the sale flow.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, *args, **kwargs):
+        if not (
+            request.user.is_staff
+            or getattr(request.user, "role", None) in {"ADMIN", "AGENT"}
+        ):
+            return Response(
+                {"detail": "Only agents or admins can view flight inventory."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        queryset = FlightInventory.objects.all()
+        if not (request.user.is_staff or getattr(request.user, "role", None) == "ADMIN"):
+            queryset = queryset.filter(created_by=request.user)
+
+        serializer = FlightInventoryResponseSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        request=FlightInventoryCreateSerializer,
+        responses={201: OpenApiResponse(response=FlightInventoryResponseSerializer)},
+        summary="Create Flight Inventory",
+        description="Creates a locally managed flight inventory record for agent sale flows.",
+    )
+    def post(self, request, *args, **kwargs):
+        if not (
+            request.user.is_staff
+            or getattr(request.user, "role", None) in {"ADMIN", "AGENT"}
+        ):
+            return Response(
+                {"detail": "Only agents or admins can create flight inventory."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = FlightInventoryCreateSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        inventory = serializer.save()
+
+        response_serializer = FlightInventoryResponseSerializer(inventory)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)

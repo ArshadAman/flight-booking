@@ -16,11 +16,21 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         """
         Dynamically filters the queryset based on user authentication:
         - Admin/Staff users can view all tickets in the system.
-        - ordinary Customers and B2B Agents can only view their own tickets.
+        - B2B Agents can view their own tickets as well as tickets booked on their own flight inventories.
+        - Ordinary Customers can only view their own tickets.
         """
         user = self.request.user
         if user.is_staff or user.role == 'ADMIN':
             return Ticket.objects.all()
+        
+        if getattr(user, 'role', '') == 'AGENT':
+            from django.db.models import Q
+            agent_inventory_ids = list(user.flight_inventories.values_list('id', flat=True))
+            local_flight_keys = [f"local-{inv_id}" for inv_id in agent_inventory_ids]
+            return Ticket.objects.filter(
+                Q(user=user) | Q(flight_id__in=local_flight_keys)
+            )
+            
         return Ticket.objects.filter(user=user)
 
     @action(detail=False, methods=['post'], url_path='buy')
@@ -40,10 +50,14 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             user=request.user
         )
 
+        flight_key = serializer.validated_data.get('flight_key', '')
+        is_local = flight_key and flight_key.startswith('local-')
+        ticket_status = Ticket.STATUS_PENDING if is_local else Ticket.STATUS_CONFIRMED
+
         # Create and save local Ticket record in DB
         ticket = Ticket.objects.create(
             user=request.user,
-            status=Ticket.STATUS_CONFIRMED,
+            status=ticket_status,
             **ticket_data
         )
 
@@ -235,3 +249,81 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
 
         response_serializer = self.get_serializer(ticket)
         return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='agent-fulfill')
+    def agent_fulfill(self, request, pk=None):
+        ticket = self.get_object()
+        if ticket.status != Ticket.STATUS_PENDING:
+            return Response(
+                {"detail": "Only pending tickets can be fulfilled."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        pnr_number = request.data.get('pnr_number')
+        ticket_number = request.data.get('ticket_number')
+        if not pnr_number or not ticket_number:
+            return Response(
+                {"detail": "Both pnr_number and ticket_number are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Security/Fulfillment check
+        if ticket.flight_id and ticket.flight_id.startswith("local-"):
+            try:
+                local_id = ticket.flight_id.replace("local-", "")
+                from flights.models import FlightInventory
+                lf = FlightInventory.objects.get(id=local_id)
+                if lf.created_by != request.user and not request.user.is_staff and getattr(request.user, 'role', '') != 'ADMIN':
+                    return Response(
+                        {"detail": "You do not have permission to fulfill this ticket."},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            except FlightInventory.DoesNotExist:
+                pass
+        
+        ticket.pnr_number = pnr_number
+        ticket.ticket_number = ticket_number
+        ticket.status = Ticket.STATUS_CONFIRMED
+        ticket.save()
+        
+        return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='agent-cancel')
+    def agent_cancel(self, request, pk=None):
+        ticket = self.get_object()
+        if ticket.status != Ticket.STATUS_PENDING:
+            return Response(
+                {"detail": "Only pending tickets can be cancelled by an agent."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        remarks = request.data.get('remarks', 'Cancelled by agent')
+        
+        # Security/Cancellation check & seat restore
+        if ticket.flight_id and ticket.flight_id.startswith("local-"):
+            try:
+                local_id = ticket.flight_id.replace("local-", "")
+                from flights.models import FlightInventory
+                lf = FlightInventory.objects.get(id=local_id)
+                if lf.created_by != request.user and not request.user.is_staff and getattr(request.user, 'role', '') != 'ADMIN':
+                    return Response(
+                        {"detail": "You do not have permission to cancel this ticket."},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                
+                # Restore seats
+                pax_count = len(ticket.passengers_data) if ticket.passengers_data else 1
+                lf.seats_available += pax_count
+                lf.save()
+            except FlightInventory.DoesNotExist:
+                pass
+        
+        ticket.status = Ticket.STATUS_CANCELLED
+        ticket.cancellation_data = {
+            "remarks": remarks,
+            "agent_cancellation_reason": remarks,
+            "cancelled_by": "Agent"
+        }
+        ticket.save()
+        
+        return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)

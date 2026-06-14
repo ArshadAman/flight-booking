@@ -1,10 +1,12 @@
 import json
 from unittest.mock import patch, MagicMock
+from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from datetime import date, timedelta
 from flights.serializers import FlightSearchRequestSerializer, FlightRevalidateRequestSerializer
+from flights.models import FlightInventory
 
 class FlightSearchTests(APITestCase):
     def setUp(self):
@@ -529,3 +531,71 @@ class FlightSSRTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
+class FlightInventoryTests(APITestCase):
+    def setUp(self):
+        self.url = reverse("flight_inventory")
+        self.user = get_user_model().objects.create_user(
+            username="agent1",
+            password="testpass123",
+            role="AGENT",
+        )
+        self.client.force_authenticate(user=self.user)
+        self.payload = {
+            "airline_code": "AI",
+            "airline_name": "Air India",
+            "flight_number": "AI121",
+            "origin": "DEL",
+            "destination": "BOM",
+            "departure_datetime": "2026-07-01T23:00:00Z",
+            "arrival_datetime": "2026-07-02T01:30:00Z",
+            "price": "1000.00",
+            "seats_available": 10,
+            "cabin_class": "Economy",
+            "duration": "2h 30m",
+            "is_refundable": True,
+            "baggage_check_in": "15 kg",
+            "baggage_hand": "7 kg",
+            "apis_required": True,
+            "policies": {
+                "cancellation": "Non-refundable within 24 hours.",
+                "change": "Changes allowed with fee.",
+            },
+            "segments": [
+                {
+                    "segment_id": 0,
+                    "airline_code": "AI",
+                    "airline_name": "Air India",
+                    "flight_number": "AI121",
+                    "aircraft_type": "Airbus A320",
+                    "origin": "DEL",
+                    "origin_city": "New Delhi",
+                    "origin_terminal": "Terminal 3",
+                    "destination": "BOM",
+                    "destination_city": "Mumbai",
+                    "destination_terminal": "Terminal 2",
+                    "departure_datetime": "2026-07-01T23:00:00Z",
+                    "arrival_datetime": "2026-07-02T01:30:00Z",
+                    "duration": "2h 30m",
+                    "stop_over": None,
+                    "return_flight": False,
+                }
+            ],
+        }
+
+    def test_create_inventory_success(self):
+        response = self.client.post(self.url, self.payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(FlightInventory.objects.count(), 1)
+
+        inventory = FlightInventory.objects.get()
+        self.assertEqual(inventory.created_by, self.user)
+        self.assertEqual(inventory.origin, "DEL")
+        self.assertEqual(inventory.segments[0]["destination"], "BOM")
+
+    def test_create_inventory_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(self.url, self.payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

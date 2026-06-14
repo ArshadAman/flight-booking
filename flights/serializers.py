@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from datetime import date
 
+from .models import FlightInventory
+
 
 class TripSegmentSerializer(serializers.Serializer):
     """One leg of a multi-city itinerary."""
@@ -290,3 +292,141 @@ class RevalidateResponseSerializer(serializers.Serializer):
     success = serializers.BooleanField()
     message = serializers.CharField()
     data = RevalidateDataSerializer()
+
+
+class InventorySegmentSerializer(serializers.Serializer):
+    segment_id = serializers.IntegerField()
+    airline_code = serializers.CharField(max_length=10)
+    airline_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    flight_number = serializers.CharField(max_length=20)
+    aircraft_type = serializers.CharField(max_length=64, required=False, allow_blank=True)
+    origin = serializers.CharField(max_length=3)
+    origin_city = serializers.CharField(max_length=128, required=False, allow_blank=True)
+    origin_terminal = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    destination = serializers.CharField(max_length=3)
+    destination_city = serializers.CharField(max_length=128, required=False, allow_blank=True)
+    destination_terminal = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    departure_datetime = serializers.DateTimeField()
+    arrival_datetime = serializers.DateTimeField()
+    duration = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    stop_over = serializers.CharField(max_length=64, required=False, allow_blank=True, allow_null=True)
+    return_flight = serializers.BooleanField(required=False, default=False)
+
+    def validate_origin(self, value):
+        return value.strip().upper()
+
+    def validate_destination(self, value):
+        return value.strip().upper()
+
+    def validate_airline_code(self, value):
+        return value.strip().upper()
+
+    def validate_flight_number(self, value):
+        return value.strip().upper()
+
+
+class FlightInventoryCreateSerializer(serializers.ModelSerializer):
+    segments = InventorySegmentSerializer(many=True, write_only=True)
+    apis_required = serializers.BooleanField(required=False, default=False, write_only=True)
+    policies = serializers.JSONField(required=False, default=dict, write_only=True)
+
+    class Meta:
+        model = FlightInventory
+        fields = [
+            "id",
+            "airline_code",
+            "airline_name",
+            "flight_number",
+            "origin",
+            "destination",
+            "departure_datetime",
+            "arrival_datetime",
+            "price",
+            "seats_available",
+            "cabin_class",
+            "duration",
+            "is_refundable",
+            "baggage_check_in",
+            "baggage_hand",
+            "apis_required",
+            "policies",
+            "segments",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_origin(self, value):
+        return value.strip().upper()
+
+    def validate_destination(self, value):
+        return value.strip().upper()
+
+    def validate_airline_code(self, value):
+        return value.strip().upper()
+
+    def validate_flight_number(self, value):
+        return value.strip().upper()
+
+    def validate(self, attrs):
+        departure_datetime = attrs.get("departure_datetime")
+        arrival_datetime = attrs.get("arrival_datetime")
+        segments = attrs.get("segments", [])
+
+        if departure_datetime and arrival_datetime and arrival_datetime <= departure_datetime:
+            raise serializers.ValidationError(
+                {"arrival_datetime": "Arrival time must be after departure time."}
+            )
+
+        if not segments:
+            raise serializers.ValidationError({"segments": "At least one segment is required."})
+
+        return attrs
+
+    def create(self, validated_data):
+        segments = validated_data.pop("segments", [])
+        validated_data.pop("apis_required", None)
+        validated_data.pop("policies", None)
+        normalized_segments = []
+
+        for segment in segments:
+            normalized_segment = {
+                key: value.isoformat() if hasattr(value, "isoformat") else value
+                for key, value in segment.items()
+            }
+            normalized_segments.append(normalized_segment)
+
+        validated_data["created_by"] = self.context["request"].user
+        validated_data["segments"] = normalized_segments
+        return FlightInventory.objects.create(**validated_data)
+
+
+class FlightInventoryResponseSerializer(serializers.ModelSerializer):
+    segments_data = serializers.JSONField(source="segments")
+    apis_required = serializers.BooleanField(default=False)
+    policies = serializers.JSONField(default=dict)
+
+    class Meta:
+        model = FlightInventory
+        fields = [
+            "id",
+            "airline_code",
+            "airline_name",
+            "flight_number",
+            "origin",
+            "destination",
+            "departure_datetime",
+            "arrival_datetime",
+            "price",
+            "seats_available",
+            "cabin_class",
+            "duration",
+            "is_refundable",
+            "baggage_check_in",
+            "baggage_hand",
+            "apis_required",
+            "policies",
+            "segments_data",
+            "created_at",
+            "updated_at",
+        ]
