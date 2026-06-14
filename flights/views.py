@@ -1,6 +1,8 @@
-from rest_framework import views, status, permissions
+from rest_framework import views, status, permissions, viewsets
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample
+from accounts.permissions import IsAgentUser
+from .models import AgentFlightInventory
 from .serializers import (
     FlightSearchRequestSerializer,
     FlightRevalidateRequestSerializer,
@@ -8,9 +10,11 @@ from .serializers import (
     FlightInventoryResponseSerializer,
     SearchResponseSerializer,
     RevalidateResponseSerializer,
+    AgentFlightInventorySerializer,
 )
 from .models import FlightInventory
 from .services import ProviderService, ProviderAPIException
+
 
 class FlightSearchView(views.APIView):
     """
@@ -90,52 +94,24 @@ class FlightSSRView(views.APIView):
         return Response(ssr_options, status=status.HTTP_200_OK)
 
 
-class FlightInventoryView(views.APIView):
+class AgentFlightInventoryViewSet(viewsets.ModelViewSet):
     """
-    Creates locally managed agent inventory flights used by the sale flow.
+    ViewSet for agents to manage their pre-purchased flight inventory.
     """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
 
-    permission_classes = (permissions.IsAuthenticated,)
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return FlightInventoryCreateSerializer
+        elif self.action in ['list', 'retrieve']:
+            return FlightInventoryResponseSerializer
+        return AgentFlightInventorySerializer
 
-    def get(self, request, *args, **kwargs):
-        if not (
-            request.user.is_staff
-            or getattr(request.user, "role", None) in {"ADMIN", "AGENT"}
-        ):
-            return Response(
-                {"detail": "Only agents or admins can view flight inventory."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+    def get_queryset(self):
+        user = self.request.user
+        if getattr(user, 'role', '') == 'ADMIN' or user.is_staff:
+            return AgentFlightInventory.objects.all()
+        return AgentFlightInventory.objects.filter(agent=user)
 
-        queryset = FlightInventory.objects.all()
-        if not (request.user.is_staff or getattr(request.user, "role", None) == "ADMIN"):
-            queryset = queryset.filter(created_by=request.user)
-
-        serializer = FlightInventoryResponseSerializer(queryset, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-    @extend_schema(
-        request=FlightInventoryCreateSerializer,
-        responses={201: OpenApiResponse(response=FlightInventoryResponseSerializer)},
-        summary="Create Flight Inventory",
-        description="Creates a locally managed flight inventory record for agent sale flows.",
-    )
-    def post(self, request, *args, **kwargs):
-        if not (
-            request.user.is_staff
-            or getattr(request.user, "role", None) in {"ADMIN", "AGENT"}
-        ):
-            return Response(
-                {"detail": "Only agents or admins can create flight inventory."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        serializer = FlightInventoryCreateSerializer(
-            data=request.data,
-            context={"request": request},
-        )
-        serializer.is_valid(raise_exception=True)
-        inventory = serializer.save()
-
-        response_serializer = FlightInventoryResponseSerializer(inventory)
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+    def perform_create(self, serializer):
+        serializer.save(agent=self.request.user)

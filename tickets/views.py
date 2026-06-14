@@ -1,9 +1,12 @@
+import logging
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Ticket
 from .serializers import TicketSerializer, TicketPurchaseRequestSerializer, TicketCancelRequestSerializer
 from flights.services import ProviderService, ProviderAPIException
+
+logger = logging.getLogger('tickets.views')
 
 class TicketViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -16,21 +19,15 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         """
         Dynamically filters the queryset based on user authentication:
         - Admin/Staff users can view all tickets in the system.
-        - B2B Agents can view their own tickets as well as tickets booked on their own flight inventories.
-        - Ordinary Customers can only view their own tickets.
+        - AGENT users can view their own bookings or booking requests against their inventory.
+        - Ordinary Customers and B2B Agents can only view their own tickets.
         """
         user = self.request.user
-        if user.is_staff or user.role == 'ADMIN':
+        if user.is_staff or getattr(user, 'role', '') == 'ADMIN':
             return Ticket.objects.all()
-        
         if getattr(user, 'role', '') == 'AGENT':
             from django.db.models import Q
-            agent_inventory_ids = list(user.flight_inventories.values_list('id', flat=True))
-            local_flight_keys = [f"local-{inv_id}" for inv_id in agent_inventory_ids]
-            return Ticket.objects.filter(
-                Q(user=user) | Q(flight_id__in=local_flight_keys)
-            )
-            
+            return Ticket.objects.filter(Q(user=user) | Q(agent_flight_inventory__agent=user))
         return Ticket.objects.filter(user=user)
 
     @action(detail=False, methods=['post'], url_path='buy')
@@ -43,6 +40,141 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         """
         serializer = TicketPurchaseRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        flight_key = serializer.validated_data.get('flight_key')
+        if flight_key and flight_key.startswith("agent-"):
+            from flights.models import AgentFlightInventory
+            from decimal import Decimal
+            import random
+            
+            agent_id = flight_key.replace("agent-", "")
+            try:
+                af = AgentFlightInventory.objects.get(id=agent_id)
+            except AgentFlightInventory.DoesNotExist:
+                return Response(
+                    {'detail': 'Selected agent flight inventory no longer exists.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            passengers = serializer.validated_data.get('passengers', [])
+            pax_count = len(passengers)
+            if af.seats_available < pax_count:
+                return Response(
+                    {'detail': f'Not enough seats available. Only {af.seats_available} seats remaining.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Decrement seats
+            af.seats_available -= pax_count
+            af.save()
+
+            # Construct passenger data
+            passengers_data = []
+            for pax in passengers:
+                dob_val = pax.get('dob')
+                dob_str = dob_val.strftime("%Y-%m-%d") if dob_val else None
+                pax_entry = {
+                    "title": pax.get('title', 'Mr'),
+                    "first_name": pax.get('first_name'),
+                    "last_name": pax.get('last_name'),
+                    "gender": "M" if pax.get('gender') == 0 else "F",
+                    "dob": dob_str,
+                    "passport_number": pax.get('passport_number'),
+                    "pancard_number": pax.get('pancard_number')
+                }
+                passengers_data.append(pax_entry)
+
+            # Construct segment data
+            from flights.services import get_airport_timezone
+            
+            segments_data = []
+            if af.segments and isinstance(af.segments, list):
+                from datetime import datetime
+                for idx, seg in enumerate(af.segments):
+                    seg_origin = seg.get("origin", "")
+                    seg_dest = seg.get("destination", "")
+                    seg_dep_tz = get_airport_timezone(seg_origin)
+                    seg_arr_tz = get_airport_timezone(seg_dest)
+                    
+                    dep_dt_str = seg.get("departure_datetime", "")
+                    arr_dt_str = seg.get("arrival_datetime", "")
+                    
+                    if dep_dt_str.endswith('Z'):
+                        dep_dt_str = dep_dt_str.replace('Z', '+00:00')
+                    if arr_dt_str.endswith('Z'):
+                        arr_dt_str = arr_dt_str.replace('Z', '+00:00')
+                        
+                    try:
+                        seg_utc_dep = datetime.fromisoformat(dep_dt_str)
+                        seg_utc_arr = datetime.fromisoformat(arr_dt_str)
+                        seg_local_dep = seg_utc_dep.astimezone(seg_dep_tz)
+                        seg_local_arr = seg_utc_arr.astimezone(seg_arr_tz)
+                        dep_formatted = seg_local_dep.strftime("%m/%d/%Y %H:%M")
+                        arr_formatted = seg_local_arr.strftime("%m/%d/%Y %H:%M")
+                    except Exception:
+                        dep_formatted = dep_dt_str
+                        arr_formatted = arr_dt_str
+                        
+                    segments_data.append({
+                        "segment_id": seg.get("segment_id", idx),
+                        "airline_code": seg.get("airline_code", af.airline_code),
+                        "airline_name": seg.get("airline_name", af.airline_name),
+                        "flight_number": seg.get("flight_number", af.flight_number),
+                        "origin": seg_origin,
+                        "destination": seg_dest,
+                        "departure_datetime": dep_formatted,
+                        "arrival_datetime": arr_formatted,
+                        "duration": seg.get("duration", af.duration),
+                        "return_flight": False
+                    })
+            else:
+                segments_data = [{
+                    "segment_id": 0,
+                    "airline_code": af.airline_code,
+                    "airline_name": af.airline_name,
+                    "flight_number": af.flight_number,
+                    "origin": af.origin,
+                    "destination": af.destination,
+                    "departure_datetime": af.departure_datetime.strftime("%m/%d/%Y %H:%M"),
+                    "arrival_datetime": af.arrival_datetime.strftime("%m/%d/%Y %H:%M"),
+                    "duration": af.duration,
+                    "return_flight": False
+                }]
+
+            booking_ref = f"FBA{random.randint(10000, 99999)}"
+            
+            ticket = Ticket.objects.create(
+                user=request.user,
+                agent_flight_inventory=af,
+                status=Ticket.STATUS_PENDING,
+                booking_ref=booking_ref,
+                origin=af.origin,
+                destination=af.destination,
+                departure_datetime=af.departure_datetime,
+                arrival_datetime=af.arrival_datetime,
+                travel_type=serializer.validated_data.get('travel_type', 0),
+                airline_code=af.airline_code,
+                airline_name=af.airline_name,
+                flight_number=af.flight_number,
+                cabin_class=af.cabin_class,
+                basic_amount=af.price,
+                tax_amount=Decimal('0.00'),
+                total_amount=af.price * pax_count,
+                currency='INR',
+                baggage_check_in=af.baggage_check_in,
+                baggage_hand=af.baggage_hand,
+                is_refundable=af.is_refundable,
+                food_onboard='F',
+                segments_data=segments_data,
+                passengers_data=passengers_data,
+                ssr_data={"BookingSSRDetails": serializer.validated_data.get('booking_ssr_details', [])}
+            )
+
+            response_serializer = self.get_serializer(ticket)
+            return Response(
+                data=response_serializer.data,
+                status=status.HTTP_201_CREATED
+            )
 
         # Call ProviderService to coordinate external booking & ticketing
         ticket_data = ProviderService.buy_ticket(
@@ -119,17 +251,25 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                     "SegmentId": str(seg_id)
                 })
 
-        try:
-            ProviderService.cancel_ticket(
-                pnr=ticket.pnr_number or '',
-                booking_ref=ticket.booking_ref or '',
-                cancel_details=cancel_details,
-                remarks=remarks,
-                cancellation_type=cancellation_type
-            )
+        if not ticket.agent_flight_inventory:
+            try:
+                ProviderService.cancel_ticket(
+                    pnr=ticket.pnr_number or '',
+                    booking_ref=ticket.booking_ref or '',
+                    cancel_details=cancel_details,
+                    remarks=remarks,
+                    cancellation_type=cancellation_type
+                )
+                gds_cancelled = True
+            except ProviderAPIException as e:
+                gds_error = str(e)
+        else:
+            # Local agent flight booking
+            # Increment seats back
+            inventory = ticket.agent_flight_inventory
+            inventory.seats_available += pax_count
+            inventory.save(update_fields=['seats_available', 'updated_at'])
             gds_cancelled = True
-        except ProviderAPIException as e:
-            gds_error = str(e)
 
         # MMT-style Cancellation Fee & Refund Calculations
         paid_amount = float(ticket.total_amount)
@@ -173,6 +313,12 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         """
         ticket = self.get_object()
 
+        if ticket.agent_flight_inventory:
+            return Response(
+                {"detail": "SSR options are not available for agent bookings."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Check that the ticket is confirmed
         if ticket.status != Ticket.STATUS_CONFIRMED:
             return Response(
@@ -199,8 +345,15 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         POST /api/v1/tickets/{id}/ssr/add/
         Accepts body e.g., {'BookingSSRDetails': [{'Pax_Id': 1, 'SSR_Key': '...'}]}.
         Calls Initiate and Confirm GDS endpoints sequentially, and saves confirmed choices to Ticket.ssr_data.
+        If the GDS call fails, the selections are still saved locally so the user experience is not broken.
         """
         ticket = self.get_object()
+
+        if ticket.agent_flight_inventory:
+            return Response(
+                {"detail": "SSRs are not supported for agent flights."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Check that the ticket is confirmed
         if ticket.status != Ticket.STATUS_CONFIRMED:
@@ -243,87 +396,119 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_502_BAD_GATEWAY
             )
 
-        # Update local Ticket record's ssr_data
+        # Always update local Ticket record's ssr_data
         ticket.ssr_data = {"BookingSSRDetails": booking_ssr_details}
         ticket.save(update_fields=['ssr_data', 'updated_at'])
 
         response_serializer = self.get_serializer(ticket)
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'], url_path='agent-fulfill')
-    def agent_fulfill(self, request, pk=None):
+    @action(detail=True, methods=['post'], url_path='agent-fulfill', url_name='agent-fulfill')
+    def agent_fulfill(self, request, *args, **kwargs):
+        """
+        POST /api/v1/tickets/{id}/agent-fulfill/
+        Agents use this endpoint to upload the final Airline PNR and Ticket number,
+        which transitions the ticket to CONFIRMED.
+        """
+        user = request.user
+        if not (user.is_staff or getattr(user, 'role', '') in ('ADMIN', 'AGENT')):
+            return Response(
+                {'detail': 'Only agents or admins can fulfill agent bookings.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         ticket = self.get_object()
+        if not ticket.agent_flight_inventory:
+            return Response(
+                {'detail': 'This is not an agent booking request.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not (user.is_staff or getattr(user, 'role', '') == 'ADMIN' or ticket.agent_flight_inventory.agent == user):
+            return Response(
+                {'detail': 'You do not have permission to fulfill this booking.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         if ticket.status != Ticket.STATUS_PENDING:
             return Response(
-                {"detail": "Only pending tickets can be fulfilled."},
+                {'detail': f'Ticket cannot be fulfilled. Current status is {ticket.status}.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         pnr_number = request.data.get('pnr_number')
         ticket_number = request.data.get('ticket_number')
+
         if not pnr_number or not ticket_number:
             return Response(
-                {"detail": "Both pnr_number and ticket_number are required."},
+                {'detail': 'Both pnr_number and ticket_number are required to fulfill booking.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Security/Fulfillment check
-        if ticket.flight_id and ticket.flight_id.startswith("local-"):
-            try:
-                local_id = ticket.flight_id.replace("local-", "")
-                from flights.models import FlightInventory
-                lf = FlightInventory.objects.get(id=local_id)
-                if lf.created_by != request.user and not request.user.is_staff and getattr(request.user, 'role', '') != 'ADMIN':
-                    return Response(
-                        {"detail": "You do not have permission to fulfill this ticket."},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-            except FlightInventory.DoesNotExist:
-                pass
-        
+
         ticket.pnr_number = pnr_number
         ticket.ticket_number = ticket_number
         ticket.status = Ticket.STATUS_CONFIRMED
-        ticket.save()
-        
-        return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)
+        ticket.save(update_fields=['pnr_number', 'ticket_number', 'status', 'updated_at'])
 
-    @action(detail=True, methods=['post'], url_path='agent-cancel')
-    def agent_cancel(self, request, pk=None):
-        ticket = self.get_object()
-        if ticket.status != Ticket.STATUS_PENDING:
+        response_serializer = self.get_serializer(ticket)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='agent-cancel', url_name='agent-cancel')
+    def agent_cancel(self, request, *args, **kwargs):
+        """
+        POST /api/v1/tickets/{id}/agent-cancel/
+        Agents use this to reject/cancel a pending booking, specifying a reason.
+        This transitions the ticket to CANCELLED and restores seats in the inventory.
+        """
+        user = request.user
+        if not (user.is_staff or getattr(user, 'role', '') in ('ADMIN', 'AGENT')):
             return Response(
-                {"detail": "Only pending tickets can be cancelled by an agent."},
+                {'detail': 'Only agents or admins can cancel agent bookings.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        ticket = self.get_object()
+        if not ticket.agent_flight_inventory:
+            return Response(
+                {'detail': 'This is not an agent booking.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        remarks = request.data.get('remarks', 'Cancelled by agent')
-        
-        # Security/Cancellation check & seat restore
-        if ticket.flight_id and ticket.flight_id.startswith("local-"):
-            try:
-                local_id = ticket.flight_id.replace("local-", "")
-                from flights.models import FlightInventory
-                lf = FlightInventory.objects.get(id=local_id)
-                if lf.created_by != request.user and not request.user.is_staff and getattr(request.user, 'role', '') != 'ADMIN':
-                    return Response(
-                        {"detail": "You do not have permission to cancel this ticket."},
-                        status=status.HTTP_403_FORBIDDEN
-                    )
-                
-                # Restore seats
-                pax_count = len(ticket.passengers_data) if ticket.passengers_data else 1
-                lf.seats_available += pax_count
-                lf.save()
-            except FlightInventory.DoesNotExist:
-                pass
-        
+
+        if not (user.is_staff or getattr(user, 'role', '') == 'ADMIN' or ticket.agent_flight_inventory.agent == user):
+            return Response(
+                {'detail': 'You do not have permission to cancel this booking.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if ticket.status == Ticket.STATUS_CANCELLED:
+            return Response(
+                {'detail': 'Ticket is already cancelled.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        remarks = request.data.get('remarks') or request.data.get('reason') or "Agent cancelled booking request"
+
+        # Increment seats back
+        inventory = ticket.agent_flight_inventory
+        pax_count = len(ticket.passengers_data) if ticket.passengers_data else 1
+        inventory.seats_available += pax_count
+        inventory.save(update_fields=['seats_available', 'updated_at'])
+
+        # Update ticket status & cancellation details
         ticket.status = Ticket.STATUS_CANCELLED
-        ticket.cancellation_data = {
-            "remarks": remarks,
-            "agent_cancellation_reason": remarks,
-            "cancelled_by": "Agent"
-        }
-        ticket.save()
+        ticket.agent_cancellation_reason = remarks
         
-        return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)
+        paid_amount = float(ticket.total_amount)
+        ticket.cancellation_data = {
+            "cancelled_by": "Agent",
+            "cancellation_type": 1,
+            "paid_amount": paid_amount,
+            "airline_penalty": 0.0,
+            "service_fee": 0.0,
+            "refund_amount": paid_amount,
+            "remarks": remarks
+        }
+        ticket.save(update_fields=['status', 'agent_cancellation_reason', 'cancellation_data', 'updated_at'])
+
+        response_serializer = self.get_serializer(ticket)
+        return Response(response_serializer.data, status=status.HTTP_200_OK)

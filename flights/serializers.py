@@ -1,7 +1,6 @@
 from rest_framework import serializers
 from datetime import date
-
-from .models import FlightInventory
+from .models import AgentFlightInventory, FlightInventory
 
 
 class TripSegmentSerializer(serializers.Serializer):
@@ -331,7 +330,7 @@ class FlightInventoryCreateSerializer(serializers.ModelSerializer):
     policies = serializers.JSONField(required=False, default=dict, write_only=True)
 
     class Meta:
-        model = FlightInventory
+        model = AgentFlightInventory
         fields = [
             "id",
             "airline_code",
@@ -396,9 +395,9 @@ class FlightInventoryCreateSerializer(serializers.ModelSerializer):
             }
             normalized_segments.append(normalized_segment)
 
-        validated_data["created_by"] = self.context["request"].user
+        validated_data["agent"] = self.context["request"].user
         validated_data["segments"] = normalized_segments
-        return FlightInventory.objects.create(**validated_data)
+        return AgentFlightInventory.objects.create(**validated_data)
 
 
 class FlightInventoryResponseSerializer(serializers.ModelSerializer):
@@ -407,7 +406,7 @@ class FlightInventoryResponseSerializer(serializers.ModelSerializer):
     policies = serializers.JSONField(default=dict)
 
     class Meta:
-        model = FlightInventory
+        model = AgentFlightInventory
         fields = [
             "id",
             "airline_code",
@@ -430,3 +429,12 @@ class FlightInventoryResponseSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class AgentFlightInventorySerializer(serializers.ModelSerializer):
+    agent_username = serializers.CharField(source='agent.username', read_only=True)
+
+    class Meta:
+        model = AgentFlightInventory
+        fields = '__all__'
+        read_only_fields = ('id', 'agent', 'created_at', 'updated_at')

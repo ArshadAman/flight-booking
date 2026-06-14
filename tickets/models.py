@@ -15,12 +15,26 @@ class Ticket(BaseModel):
         (STATUS_CANCELLED, 'Cancelled'),
     ]
 
-    # One-to-Many relationship: One user can have multiple tickets
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='tickets',
         help_text="The user who bought/owns this ticket."
+    )
+
+    # Offline/Agent Inventory details
+    agent_flight_inventory = models.ForeignKey(
+        'flights.AgentFlightInventory',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='tickets',
+        help_text="Linked agent inventory, if offline booking."
+    )
+    agent_cancellation_reason = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Reason given by agent for cancelling this booking request."
     )
 
     # Booking & PNR Details

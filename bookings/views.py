@@ -5,6 +5,7 @@ from django.db import transaction
 from decimal import Decimal
 import datetime
 
+
 from bookings.models import GroupBooking, GroupQuote, GroupPassenger, GroupChangeRequest
 from bookings.serializers import (
     GroupBookingSerializer,
@@ -15,30 +16,47 @@ from bookings.serializers import (
 
 class GroupBookingViewSet(viewsets.ModelViewSet):
     serializer_class = GroupBookingSerializer
-    permission_classes = [permissions.AllowAny]
+    # Require authentication for group booking operations. Public access caused
+    # accidental exposure when an admin session cookie existed in the browser.
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_user(self):
+        # Use the real authenticated user if JWT was provided
         user = self.request.user
-        if not user or user.is_anonymous:
-            # Fallback mock authentication
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            mock_role = (
-                self.request.headers.get('X-Mock-Role') or 
-                self.request.query_params.get('mock_role') or 
-                (self.request.data.get('mock_role') if isinstance(self.request.data, dict) else None)
-            ) or 'AGENT'
-            username = f"mock_{mock_role.lower()}"
-            user, _ = User.objects.get_or_create(
-                username=username,
-                defaults={'role': mock_role, 'email': f'{mock_role.lower()}@example.com'}
-            )
+        if user and user.is_authenticated and not user.is_anonymous:
+            return user
+
+        # Fallback: derive mock user from X-Mock-Role header (dev/test mode)
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        mock_role = (
+            self.request.headers.get('X-Mock-Role') or
+            self.request.query_params.get('mock_role') or
+            (self.request.data.get('mock_role') if isinstance(self.request.data, dict) else None)
+        ) or 'AGENT'
+        username = f"mock_{mock_role.lower()}"
+        user, _ = User.objects.get_or_create(
+            username=username,
+            defaults={'role': mock_role, 'email': f'{mock_role.lower()}@example.com'}
+        )
         return user
 
     def get_queryset(self):
         user = self.get_user()
-        if user.role == 'ADMIN':
+        # Admins see all bookings
+        if getattr(user, 'role', '') == 'ADMIN':
             return GroupBooking.objects.all().order_by('-created_at')
+
+        # Agents should see new requests and bookings they created.
+        # This allows agents to pick up incoming group requests (NEW_REQUEST)
+        # while also viewing their own bookings.
+        from django.db.models import Q
+        if getattr(user, 'role', '') == 'AGENT':
+            return GroupBooking.objects.filter(
+                Q(user=user) | Q(status__in=['NEW_REQUEST', 'FARE_QUOTED', 'NEGOTIATION'])
+            ).order_by('-created_at')
+
+        # Regular customers only see their own bookings
         return GroupBooking.objects.filter(user=user).order_by('-created_at')
 
     def perform_create(self, serializer):
@@ -323,3 +341,4 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
             "booking_pax_children": booking.pax_children,
             "booking_expected_fare": booking.expected_fare_per_pax
         })
+
