@@ -184,9 +184,10 @@ CELERY_TIMEZONE = TIME_ZONE
 CORS_ALLOW_ALL_ORIGINS = True # Change in production
 
 CSRF_TRUSTED_ORIGINS = [
-    'https://beverly-readily-hewlett-school.trycloudflare.com',
+    'https://portion-wiley-events-flow.trycloudflare.com',
     'https://api.occ.services',
 ]
+
 
 
 # FlyShop API Credentials
