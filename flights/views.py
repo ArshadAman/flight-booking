@@ -1,13 +1,17 @@
-from rest_framework import views, status, permissions
+from rest_framework import views, status, permissions, viewsets
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample
+from accounts.permissions import IsAgentUser
+from .models import AgentFlightInventory
 from .serializers import (
     FlightSearchRequestSerializer,
     FlightRevalidateRequestSerializer,
     SearchResponseSerializer,
     RevalidateResponseSerializer,
+    AgentFlightInventorySerializer,
 )
 from .services import ProviderService
+
 
 class FlightSearchView(views.APIView):
     """
@@ -85,3 +89,21 @@ class FlightSSRView(views.APIView):
             )
 
         return Response(ssr_options, status=status.HTTP_200_OK)
+
+
+class AgentFlightInventoryViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for agents to manage their pre-purchased flight inventory.
+    """
+    serializer_class = AgentFlightInventorySerializer
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'ADMIN' or user.is_staff:
+            return AgentFlightInventory.objects.all()
+        return AgentFlightInventory.objects.filter(agent=user)
+
+    def perform_create(self, serializer):
+        serializer.save(agent=self.request.user)
+

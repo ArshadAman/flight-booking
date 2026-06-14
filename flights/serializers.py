@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from datetime import date
+from .models import AgentFlightInventory
 
 
 class TripSegmentSerializer(serializers.Serializer):
@@ -290,3 +291,13 @@ class RevalidateResponseSerializer(serializers.Serializer):
     success = serializers.BooleanField()
     message = serializers.CharField()
     data = RevalidateDataSerializer()
+
+
+class AgentFlightInventorySerializer(serializers.ModelSerializer):
+    agent_username = serializers.CharField(source='agent.username', read_only=True)
+
+    class Meta:
+        model = AgentFlightInventory
+        fields = '__all__'
+        read_only_fields = ('id', 'agent', 'created_at', 'updated_at')
+

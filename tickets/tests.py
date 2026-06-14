@@ -860,4 +860,216 @@ class TicketAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
         self.assertIn("Failed to add SSR: Provider Error: Invalid Passenger ID or SSR Mismatch", response.data['detail'])
 
+    def test_agent_booking_buy(self):
+        """
+        Verify buying an agent flight inventory ticket creates a local PENDING ticket.
+        """
+        agent = User.objects.create_user(
+            username='agent_seller',
+            password='Password123!',
+            role='AGENT'
+        )
+        from flights.models import AgentFlightInventory
+        af = AgentFlightInventory.objects.create(
+            agent=agent,
+            airline_code='6E',
+            airline_name='IndiGo',
+            flight_number='6E-2012',
+            origin='DEL',
+            destination='BOM',
+            departure_datetime=timezone.now() + timezone.timedelta(days=10),
+            arrival_datetime=timezone.now() + timezone.timedelta(days=10, hours=2),
+            price=Decimal('5000.00'),
+            seats_available=10,
+            cabin_class='Economy',
+            duration='2h 0m'
+        )
+
+        self.client.force_authenticate(user=self.customer_a)
+        buy_url = reverse('ticket-buy')
+        payload = {
+            "search_key": "some-search-key",
+            "flight_key": f"agent-{af.id}",
+            "fare_id": f"agent-fare-{af.id}",
+            "customer_mobile": "1234567890",
+            "passenger_mobile": "1234567890",
+            "passenger_email": "customer@example.com",
+            "passengers": [
+                {
+                    "title": "Mr",
+                    "first_name": "John",
+                    "last_name": "Doe",
+                    "gender": 0,
+                    "dob": "1990-01-01"
+                }
+            ]
+        }
+
+        response = self.client.post(buy_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['status'], 'PENDING')
+        self.assertEqual(float(response.data['total_amount']), 5000.0)
+        
+        af.refresh_from_db()
+        self.assertEqual(af.seats_available, 9)
+
+    def test_agent_fulfillment_and_cancellation(self):
+        """
+        Verify agent can fulfill or cancel a pending ticket linked to their inventory.
+        """
+        agent = User.objects.create_user(
+            username='agent_seller_2',
+            password='Password123!',
+            role='AGENT'
+        )
+        from flights.models import AgentFlightInventory
+        af = AgentFlightInventory.objects.create(
+            agent=agent,
+            airline_code='6E',
+            airline_name='IndiGo',
+            flight_number='6E-2012',
+            origin='DEL',
+            destination='BOM',
+            departure_datetime=timezone.now() + timezone.timedelta(days=10),
+            arrival_datetime=timezone.now() + timezone.timedelta(days=10, hours=2),
+            price=Decimal('5000.00'),
+            seats_available=10,
+            cabin_class='Economy',
+            duration='2h 0m'
+        )
+
+        ticket = Ticket.objects.create(
+            user=self.customer_a,
+            agent_flight_inventory=af,
+            status='PENDING',
+            booking_ref='FBA9999',
+            origin='DEL',
+            destination='BOM',
+            departure_datetime=af.departure_datetime,
+            arrival_datetime=af.arrival_datetime,
+            travel_type=0,
+            airline_code=af.airline_code,
+            airline_name=af.airline_name,
+            flight_number=af.flight_number,
+            cabin_class=af.cabin_class,
+            basic_amount=af.price,
+            tax_amount=Decimal('0.00'),
+            total_amount=af.price,
+            currency='INR',
+            passengers_data=[{"title": "Mr", "first_name": "John", "last_name": "Doe"}]
+        )
+
+        self.client.force_authenticate(user=agent)
+        fulfill_url = reverse('ticket-agent-fulfill', kwargs={'pk': ticket.id})
+        response = self.client.post(fulfill_url, {"pnr_number": "AGENTPNR", "ticket_number": "AGETKT"}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'CONFIRMED')
+        self.assertEqual(response.data['pnr_number'], 'AGENTPNR')
+        self.assertEqual(response.data['ticket_number'], 'AGETKT')
+
+        ticket.status = 'PENDING'
+        ticket.save()
+
+        cancel_url = reverse('ticket-agent-cancel', kwargs={'pk': ticket.id})
+        af.seats_available = 9
+        af.save()
+
+        response = self.client.post(cancel_url, {"remarks": "Flight cancelled by airline"}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'CANCELLED')
+        self.assertEqual(response.data['agent_cancellation_reason'], 'Flight cancelled by airline')
+
+        af.refresh_from_db()
+        self.assertEqual(af.seats_available, 10)
+
+    def test_agent_booking_buy_multi_segment(self):
+        """
+        Verify buying a multi-segment agent flight inventory ticket correctly creates segments_data with all segments.
+        """
+        agent = User.objects.create_user(
+            username='agent_seller_multi',
+            password='Password123!',
+            role='AGENT'
+        )
+        from flights.models import AgentFlightInventory
+        
+        seg_1_dep = timezone.now() + timezone.timedelta(days=10)
+        seg_1_arr = seg_1_dep + timezone.timedelta(hours=4)
+        seg_2_dep = seg_1_arr + timezone.timedelta(hours=2)
+        seg_2_arr = seg_2_dep + timezone.timedelta(hours=4, minutes=30)
+        
+        segments_json = [
+            {
+                "segment_id": 0,
+                "airline_code": "AI",
+                "airline_name": "Air India",
+                "flight_number": "AI 121",
+                "origin": "DEL",
+                "destination": "BOM",
+                "departure_datetime": seg_1_dep.isoformat(),
+                "arrival_datetime": seg_1_arr.isoformat(),
+                "duration": "4 hr"
+            },
+            {
+                "segment_id": 1,
+                "airline_code": "AI",
+                "airline_name": "Air India",
+                "flight_number": "AI 242",
+                "origin": "BOM",
+                "destination": "BKK",
+                "departure_datetime": seg_2_dep.isoformat(),
+                "arrival_datetime": seg_2_arr.isoformat(),
+                "duration": "4 hr 30mins"
+            }
+        ]
+
+        af = AgentFlightInventory.objects.create(
+            agent=agent,
+            airline_code='AI',
+            airline_name='Air India',
+            flight_number='AI-121',
+            origin='DEL',
+            destination='BKK',
+            departure_datetime=seg_1_dep,
+            arrival_datetime=seg_2_arr,
+            price=Decimal('15000.00'),
+            seats_available=10,
+            cabin_class='Economy',
+            duration='10h 30m',
+            segments=segments_json
+        )
+
+        self.client.force_authenticate(user=self.customer_a)
+        buy_url = reverse('ticket-buy')
+        payload = {
+            "search_key": "some-search-key",
+            "flight_key": f"agent-{af.id}",
+            "fare_id": f"agent-fare-{af.id}",
+            "customer_mobile": "1234567890",
+            "passenger_mobile": "1234567890",
+            "passenger_email": "customer@example.com",
+            "passengers": [
+                {
+                    "title": "Mr",
+                    "first_name": "Jane",
+                    "last_name": "Smith",
+                    "gender": 1,
+                    "dob": "1992-05-05"
+                }
+            ]
+        }
+
+        response = self.client.post(buy_url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['status'], 'PENDING')
+        self.assertEqual(len(response.data['segments_data']), 2)
+        
+        self.assertEqual(response.data['segments_data'][0]['origin'], 'DEL')
+        self.assertEqual(response.data['segments_data'][0]['destination'], 'BOM')
+        self.assertEqual(response.data['segments_data'][0]['flight_number'], 'AI 121')
+        
+        self.assertEqual(response.data['segments_data'][1]['origin'], 'BOM')
+        self.assertEqual(response.data['segments_data'][1]['destination'], 'BKK')
+        self.assertEqual(response.data['segments_data'][1]['flight_number'], 'AI 242')
+
 

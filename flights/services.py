@@ -14,6 +14,39 @@ class ProviderAPIException(APIException):
     default_detail = 'Flight Provider API encountered an error.'
     default_code = 'provider_error'
 
+def get_airport_timezone(iata_code):
+    from zoneinfo import ZoneInfo
+    iata = (iata_code or "").upper().strip()
+    
+    # India domestic airports (default fallback is also Asia/Kolkata)
+    india_airports = {
+        "DEL", "BOM", "BLR", "MAA", "CCU", "HYD", "PNQ", "AMD", "GOI", "JAI", 
+        "COK", "LKO", "GAU", "TRV", "BBI", "PAT", "IDR", "IXC"
+    }
+    if iata in india_airports:
+        return ZoneInfo("Asia/Kolkata")
+        
+    # International airports
+    intl_tz = {
+        "DXB": "Asia/Dubai",
+        "SIN": "Asia/Singapore",
+        "LHR": "Europe/London",
+        "JFK": "America/New_York",
+        "CDG": "Europe/Paris",
+        "HND": "Asia/Tokyo",
+        "SYD": "Australia/Sydney",
+        "YYZ": "America/Toronto",
+        "FRA": "Europe/Berlin",
+        "HKG": "Asia/Hong_Kong",
+        "BKK": "Asia/Bangkok",
+    }
+    
+    tz_name = intl_tz.get(iata, "Asia/Kolkata")
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return ZoneInfo("UTC")
+
 class ProviderService:
     @staticmethod
     def generate_request_id():
@@ -148,16 +181,396 @@ class ProviderService:
 
         normalized_flights = cls._normalize_trip_details(raw_trip_details)
 
+        # Merge and compare with Agent Flight Inventories
+        from flights.models import AgentFlightInventory
+
+        # Query matching Agent Flight Inventories based on search criteria
+        passenger_count = adults + children
+        outbound_agent_candidates = AgentFlightInventory.objects.filter(
+            origin=origin,
+            destination=destination,
+            seats_available__gte=passenger_count
+        )
+
+        inbound_agent_candidates = AgentFlightInventory.objects.none()
+        if return_date:
+            inbound_agent_candidates = AgentFlightInventory.objects.filter(
+                origin=destination,
+                destination=origin,
+                seats_available__gte=passenger_count
+            )
+
+        # Filter by local departure date in memory to solve timezone matching issues
+        outbound_agent_list = []
+        for af in outbound_agent_candidates:
+            tz = get_airport_timezone(af.origin)
+            local_dep_dt = af.departure_datetime.astimezone(tz)
+            if local_dep_dt.date() == travel_date:
+                outbound_agent_list.append(af)
+
+        inbound_agent_list = []
+        for af in inbound_agent_candidates:
+            tz = get_airport_timezone(af.origin)
+            local_dep_dt = af.departure_datetime.astimezone(tz)
+            if local_dep_dt.date() == return_date:
+                inbound_agent_list.append(af)
+
+        agent_flights = outbound_agent_list + inbound_agent_list
+        mapped_agent_flights = []
+
+        for af in agent_flights:
+            is_ret = (return_date is not None and af.origin == destination and af.destination == origin)
+            
+            # Convert to local time of the respective airport for segments serialization
+            dep_tz = get_airport_timezone(af.origin)
+            arr_tz = get_airport_timezone(af.destination)
+            local_dep = af.departure_datetime.astimezone(dep_tz)
+            local_arr = af.arrival_datetime.astimezone(arr_tz)
+
+            segments_list = []
+            if af.segments and isinstance(af.segments, list):
+                from datetime import datetime
+                for idx, seg in enumerate(af.segments):
+                    seg_origin = seg.get("origin", "")
+                    seg_dest = seg.get("destination", "")
+                    seg_dep_tz = get_airport_timezone(seg_origin)
+                    seg_arr_tz = get_airport_timezone(seg_dest)
+                    
+                    dep_dt_str = seg.get("departure_datetime", "")
+                    arr_dt_str = seg.get("arrival_datetime", "")
+                    
+                    if dep_dt_str.endswith('Z'):
+                        dep_dt_str = dep_dt_str.replace('Z', '+00:00')
+                    if arr_dt_str.endswith('Z'):
+                        arr_dt_str = arr_dt_str.replace('Z', '+00:00')
+                        
+                    try:
+                        seg_utc_dep = datetime.fromisoformat(dep_dt_str)
+                        seg_utc_arr = datetime.fromisoformat(arr_dt_str)
+                        seg_local_dep = seg_utc_dep.astimezone(seg_dep_tz)
+                        seg_local_arr = seg_utc_arr.astimezone(seg_arr_tz)
+                        dep_formatted = seg_local_dep.strftime("%m/%d/%Y %H:%M")
+                        arr_formatted = seg_local_arr.strftime("%m/%d/%Y %H:%M")
+                    except Exception:
+                        dep_formatted = dep_dt_str
+                        arr_formatted = arr_dt_str
+                        
+                    segments_list.append({
+                        "segment_id": seg.get("segment_id", idx),
+                        "airline_code": seg.get("airline_code", af.airline_code),
+                        "airline_name": seg.get("airline_name", af.airline_name),
+                        "flight_number": seg.get("flight_number", af.flight_number),
+                        "aircraft_type": seg.get("aircraft_type", "Airbus A320"),
+                        "origin": seg_origin,
+                        "origin_city": seg.get("origin_city", seg_origin),
+                        "origin_terminal": seg.get("origin_terminal", ""),
+                        "destination": seg_dest,
+                        "destination_city": seg.get("destination_city", seg_dest),
+                        "destination_terminal": seg.get("destination_terminal", ""),
+                        "departure_datetime": dep_formatted,
+                        "arrival_datetime": arr_formatted,
+                        "duration": seg.get("duration", af.duration),
+                        "stop_over": seg.get("stop_over"),
+                        "return_flight": is_ret
+                    })
+            else:
+                segments_list = [{
+                    "segment_id": 0,
+                    "airline_code": af.airline_code,
+                    "airline_name": af.airline_name,
+                    "flight_number": af.flight_number,
+                    "aircraft_type": "Airbus A320",
+                    "origin": af.origin,
+                    "origin_city": af.origin,
+                    "origin_terminal": "",
+                    "destination": af.destination,
+                    "destination_city": af.destination,
+                    "destination_terminal": "",
+                    "departure_datetime": local_dep.strftime("%m/%d/%Y %H:%M"),
+                    "arrival_datetime": local_arr.strftime("%m/%d/%Y %H:%M"),
+                    "duration": af.duration,
+                    "stop_over": None,
+                    "return_flight": is_ret
+                }]
+
+            mapped_af = {
+                "flight_key": f"agent-{af.id}",
+                "flight_id": af.id,
+                "airline_code": af.airline_code,
+                "origin": af.origin,
+                "destination": af.destination,
+                "block_ticket_allowed": False,
+                "cached": False,
+                "repriced": True,
+                "is_fare_change": False,
+                "gst_entry_allowed": False,
+                "has_more_class": False,
+                "inventory_type": 1,
+                "is_lcc": True,
+                "is_agent_flight": True,
+                "agent_flight_id": str(af.id),
+                "segments": segments_list,
+                "fares": [{
+                    "fare_id": f"agent-fare-{af.id}",
+                    "refundable": af.is_refundable,
+                    "seats_available": str(af.seats_available),
+                    "food_onboard": "F",
+                    "gst_mandatory": False,
+                    "price_details": {
+                        "currency": "INR",
+                        "basic_amount": float(af.price),
+                        "tax_amount": 0.0,
+                        "total_amount": float(af.price)
+                    },
+                    "baggage": {
+                        "check_in": af.baggage_check_in,
+                        "hand": af.baggage_hand
+                    },
+                    "fare_type": "PUB",
+                    "product_class": af.cabin_class,
+                    "fare_basis": "ECONOMY",
+                    "class_desc": af.cabin_class
+                }]
+            }
+            mapped_agent_flights.append(mapped_af)
+
+        # Deduplication and Comparison logic helpers
+        def normalize_flight_num(num, code):
+            num = num.upper().replace('-', '').replace(' ', '')
+            if code:
+                code = code.upper()
+                if num.startswith(code):
+                    num = num[len(code):]
+            # Strip common fare suffixes to prevent mismatches
+            for fs in ["PUB", "STU", "DEF", "CORP"]:
+                if num.endswith(fs):
+                    num = num[:-len(fs)]
+                    break
+            return num
+
+        def parse_gds_datetime(dt_str):
+            from datetime import datetime
+            try:
+                return datetime.strptime(dt_str, "%m/%d/%Y %H:%M")
+            except:
+                return None
+
+        def datetimes_match(agent_dt, gds_dt_str, agent_origin=None):
+            gds_dt = parse_gds_datetime(gds_dt_str)
+            if not gds_dt or not agent_dt:
+                return False
+            # GDS datetime is in the local time of the origin airport.
+            # Convert the agent datetime to the local timezone of that origin airport.
+            tz = get_airport_timezone(agent_origin or origin)
+            local_agent_dt = agent_dt.astimezone(tz)
+            return (local_agent_dt.year == gds_dt.year and
+                    local_agent_dt.month == gds_dt.month and
+                    local_agent_dt.day == gds_dt.day and
+                    local_agent_dt.hour == gds_dt.hour and
+                    local_agent_dt.minute == gds_dt.minute)
+
+        final_flights = []
+        discarded_gds_flight_keys = set()
+        keep_agent_flights = []
+
+        for maf in mapped_agent_flights:
+            af_db = next(x for x in agent_flights if x.id == maf["flight_id"])
+            matching_gds_flight = None
+            matching_gds_lowest_price = float('inf')
+
+            for gf in normalized_flights:
+                seg_matches = False
+                for seg in gf.get("segments", []):
+                    if (seg.get("origin") == af_db.origin and
+                        seg.get("destination") == af_db.destination and
+                        seg.get("airline_code") == af_db.airline_code and
+                        normalize_flight_num(seg.get("flight_number", ""), seg.get("airline_code")) == normalize_flight_num(af_db.flight_number, af_db.airline_code) and
+                        datetimes_match(af_db.departure_datetime, seg.get("departure_datetime", ""), af_db.origin)):
+                        seg_matches = True
+                        break
+                
+                if seg_matches:
+                    matching_gds_flight = gf
+                    gds_prices = [float(f["price_details"]["total_amount"]) for f in gf.get("fares", []) if "price_details" in f]
+                    if gds_prices:
+                        matching_gds_lowest_price = min(gds_prices)
+                    break
+
+            if matching_gds_flight:
+                # Keep agent flight if cheaper than GDS
+                if float(af_db.price) < matching_gds_lowest_price:
+                    discarded_gds_flight_keys.add(matching_gds_flight["flight_key"])
+                    maf["is_agent_deal"] = True
+                    keep_agent_flights.append(maf)
+            else:
+                keep_agent_flights.append(maf)
+
+        for gf in normalized_flights:
+            if gf["flight_key"] not in discarded_gds_flight_keys:
+                final_flights.append(gf)
+
+        final_flights.extend(keep_agent_flights)
+
+        # Sort final list of flights by price (lowest price first)
+        def get_lowest_fare_price(flight):
+            fares = flight.get("fares", [])
+            if not fares:
+                return float('inf')
+            prices = []
+            for f in fares:
+                price_details = f.get("price_details")
+                if price_details and "total_amount" in price_details:
+                    try:
+                        prices.append(float(price_details["total_amount"]))
+                    except (ValueError, TypeError):
+                        pass
+            return min(prices) if prices else float('inf')
+
+        final_flights.sort(key=get_lowest_fare_price)
+
         return {
             "search_key": search_key,
-            "flights": normalized_flights
+            "flights": final_flights
         }
+
 
     @classmethod
     def reprice_flight(cls, validated_data, request_id=None):
         """
         Revalidates a selected flight and fare against the provider before booking.
         """
+        flight_key = validated_data.get('flight_key')
+        if flight_key and flight_key.startswith("agent-"):
+            from flights.models import AgentFlightInventory
+            agent_id = flight_key.replace("agent-", "")
+            try:
+                af = AgentFlightInventory.objects.get(id=agent_id)
+            except AgentFlightInventory.DoesNotExist:
+                raise ProviderAPIException("Selected agent flight inventory no longer exists.")
+
+            if af.seats_available <= 0:
+                raise ProviderAPIException("No seats available on this agent flight.")
+
+            dep_tz = get_airport_timezone(af.origin)
+            arr_tz = get_airport_timezone(af.destination)
+            local_dep = af.departure_datetime.astimezone(dep_tz)
+            local_arr = af.arrival_datetime.astimezone(arr_tz)
+
+            segments_list = []
+            if af.segments and isinstance(af.segments, list):
+                from datetime import datetime
+                for idx, seg in enumerate(af.segments):
+                    seg_origin = seg.get("origin", "")
+                    seg_dest = seg.get("destination", "")
+                    seg_dep_tz = get_airport_timezone(seg_origin)
+                    seg_arr_tz = get_airport_timezone(seg_dest)
+                    
+                    dep_dt_str = seg.get("departure_datetime", "")
+                    arr_dt_str = seg.get("arrival_datetime", "")
+                    
+                    if dep_dt_str.endswith('Z'):
+                        dep_dt_str = dep_dt_str.replace('Z', '+00:00')
+                    if arr_dt_str.endswith('Z'):
+                        arr_dt_str = arr_dt_str.replace('Z', '+00:00')
+                        
+                    try:
+                        seg_utc_dep = datetime.fromisoformat(dep_dt_str)
+                        seg_utc_arr = datetime.fromisoformat(arr_dt_str)
+                        seg_local_dep = seg_utc_dep.astimezone(seg_dep_tz)
+                        seg_local_arr = seg_utc_arr.astimezone(seg_arr_tz)
+                        dep_formatted = seg_local_dep.strftime("%m/%d/%Y %H:%M")
+                        arr_formatted = seg_local_arr.strftime("%m/%d/%Y %H:%M")
+                    except Exception:
+                        dep_formatted = dep_dt_str
+                        arr_formatted = arr_dt_str
+                        
+                    segments_list.append({
+                        "segment_id": seg.get("segment_id", idx),
+                        "airline_code": seg.get("airline_code", af.airline_code),
+                        "airline_name": seg.get("airline_name", af.airline_name),
+                        "flight_number": seg.get("flight_number", af.flight_number),
+                        "aircraft_type": seg.get("aircraft_type", "Airbus A320"),
+                        "origin": seg_origin,
+                        "origin_city": seg.get("origin_city", seg_origin),
+                        "origin_terminal": seg.get("origin_terminal", ""),
+                        "destination": seg_dest,
+                        "destination_city": seg.get("destination_city", seg_dest),
+                        "destination_terminal": seg.get("destination_terminal", ""),
+                        "departure_datetime": dep_formatted,
+                        "arrival_datetime": arr_formatted,
+                        "duration": seg.get("duration", af.duration),
+                        "stop_over": seg.get("stop_over"),
+                        "return_flight": False
+                    })
+            else:
+                segments_list = [{
+                    "segment_id": 0,
+                    "airline_code": af.airline_code,
+                    "airline_name": af.airline_name,
+                    "flight_number": af.flight_number,
+                    "aircraft_type": "Airbus A320",
+                    "origin": af.origin,
+                    "origin_city": af.origin,
+                    "origin_terminal": "",
+                    "destination": af.destination,
+                    "destination_city": af.destination,
+                    "destination_terminal": "",
+                    "departure_datetime": local_dep.strftime("%m/%d/%Y %H:%M"),
+                    "arrival_datetime": local_arr.strftime("%m/%d/%Y %H:%M"),
+                    "duration": af.duration,
+                    "stop_over": None,
+                    "return_flight": False
+                }]
+
+            normalized_flight = {
+                "flight_key": flight_key,
+                "flight_id": af.id,
+                "airline_code": af.airline_code,
+                "origin": af.origin,
+                "destination": af.destination,
+                "block_ticket_allowed": False,
+                "cached": False,
+                "repriced": True,
+                "is_fare_change": False,
+                "gst_entry_allowed": False,
+                "has_more_class": False,
+                "inventory_type": 1,
+                "is_lcc": True,
+                "is_agent_flight": True,
+                "agent_flight_id": str(af.id),
+                "segments": segments_list,
+                "fares": [{
+                    "fare_id": validated_data.get('fare_id') or f"agent-fare-{af.id}",
+                    "refundable": af.is_refundable,
+                    "seats_available": str(af.seats_available),
+                    "food_onboard": "F",
+                    "gst_mandatory": False,
+                    "price_details": {
+                        "currency": "INR",
+                        "basic_amount": float(af.price),
+                        "tax_amount": 0.0,
+                        "total_amount": float(af.price)
+                    },
+                    "baggage": {
+                        "check_in": af.baggage_check_in,
+                        "hand": af.baggage_hand
+                    },
+                    "fare_type": "PUB",
+                    "product_class": af.cabin_class,
+                    "fare_basis": "ECONOMY",
+                    "class_desc": af.cabin_class
+                }]
+            }
+
+            return {
+                "search_key": validated_data.get('search_key'),
+                "flight_key": flight_key,
+                "fare_id": validated_data.get('fare_id') or f"agent-fare-{af.id}",
+                "repriced": True,
+                "is_fare_change": False,
+                "flight": normalized_flight,
+            }
+
         base_url = settings.FLIGHT_API_BASE_URL.rstrip('/')
         endpoint = f"{base_url}/airlinehost/AirAPIService.svc/JSONService/Air_Reprice"
 
@@ -794,10 +1207,10 @@ class ProviderService:
         logger.info(f"Incoming FlyShop GetPostSSR Response [ID: {request_id}] status_code={response.status_code}")
 
         response_header = response_json.get('Response_Header', {})
-        error_code = response_header.get('Error_Code', '0000')
-        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+        error_code = response_header.get('Error_Code') or '0000'
+        error_desc = response_header.get('Error_Desc') or 'SUCCESS'
 
-        if error_code != '0000' and error_code != '000':
+        if error_code not in ('0000', '000'):
             logger.error(f"FlyShop GetPostSSR failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
             raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
 
@@ -848,10 +1261,10 @@ class ProviderService:
         logger.info(f"Incoming FlyShop InitiatePostSSR Response [ID: {request_id}] status_code={response.status_code}")
 
         response_header = response_json.get('Response_Header', {})
-        error_code = response_header.get('Error_Code', '0000')
-        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+        error_code = response_header.get('Error_Code') or '0000'
+        error_desc = response_header.get('Error_Desc') or 'SUCCESS'
 
-        if error_code != '0000' and error_code != '000':
+        if error_code not in ('0000', '000', '0046'):
             logger.error(f"FlyShop InitiatePostSSR failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
             raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
 
@@ -902,10 +1315,10 @@ class ProviderService:
         logger.info(f"Incoming FlyShop ConfirmPostSSR Response [ID: {request_id}] status_code={response.status_code}")
 
         response_header = response_json.get('Response_Header', {})
-        error_code = response_header.get('Error_Code', '0000')
-        error_desc = response_header.get('Error_Desc', 'SUCCESS')
+        error_code = response_header.get('Error_Code') or '0000'
+        error_desc = response_header.get('Error_Desc') or 'SUCCESS'
 
-        if error_code != '0000' and error_code != '000':
+        if error_code not in ('0000', '000', '0046'):
             logger.error(f"FlyShop ConfirmPostSSR failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
             raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
 

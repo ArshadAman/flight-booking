@@ -10,6 +10,8 @@ class TicketSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'user',
+            'agent_flight_inventory',
+            'agent_cancellation_reason',
             'pnr_number',
             'ticket_number',
             'booking_ref',
@@ -168,6 +170,26 @@ class TicketPurchaseRequestSerializer(serializers.Serializer):
     passengers = PassengerDetailsSerializer(
         many=True,
         help_text="List of passenger detail dicts included in ticket booking."
+    )
+    travel_type = serializers.IntegerField(
+        required=False,
+        default=0,
+        help_text="0=One-Way, 1=Round-Trip, 2=Multi-City."
+    )
+    gst_input = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Whether GST details should be included during revalidation."
+    )
+    single_pricing = serializers.BooleanField(
+        required=False,
+        default=True,
+        help_text="Whether the provider should return a single pricing quote."
+    )
+    source_type = serializers.IntegerField(
+        required=False,
+        default=0,
+        help_text="Provider source type flag for Air_Reprice."
     )
     booking_ssr_details = serializers.JSONField(
         required=False,
