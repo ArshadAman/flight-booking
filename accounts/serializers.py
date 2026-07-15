@@ -7,8 +7,11 @@ User = get_user_model()
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone_number')
-        read_only_fields = ('id', 'role')
+        fields = (
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'role', 'phone_number', 'is_staff', 'is_superuser',
+        )
+        read_only_fields = ('id', 'role', 'is_staff', 'is_superuser')
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -79,6 +82,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'first_name': self.user.first_name,
                 'last_name': self.user.last_name,
                 'role': self.user.role,
+                'is_staff': self.user.is_staff,
+                'is_superuser': self.user.is_superuser,
             }
         })
         return data

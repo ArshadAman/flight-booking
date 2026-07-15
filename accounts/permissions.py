@@ -1,11 +1,21 @@
 from rest_framework import permissions
 
+
+def is_platform_admin(user) -> bool:
+    """True for role=ADMIN, Django staff, or superuser."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+        return True
+    return getattr(user, "role", "") == "ADMIN"
+
+
 class IsAdminUser(permissions.BasePermission):
     """
-    Allows access only to admin users.
+    Allows access only to admin users (role ADMIN, staff, or superuser).
     """
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.role == 'ADMIN')
+        return is_platform_admin(request.user)
 
 class IsAgentUser(permissions.BasePermission):
     """

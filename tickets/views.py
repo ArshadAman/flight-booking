@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from .models import Ticket
 from .serializers import TicketSerializer, TicketPurchaseRequestSerializer, TicketCancelRequestSerializer
 from flights.services import ProviderService, ProviderAPIException
+from accounts.permissions import is_platform_admin
 
 logger = logging.getLogger('tickets.views')
 
@@ -18,17 +19,56 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         """
         Dynamically filters the queryset based on user authentication:
-        - Admin/Staff users can view all tickets in the system.
+        - Admin/Staff/Superuser can view all tickets (including bookings created from the user panel).
         - AGENT users can view their own bookings or booking requests against their inventory.
         - Ordinary Customers and B2B Agents can only view their own tickets.
+        Supports query filters: ?status=CONFIRMED&origin=DEL&pnr=XYZ&search=term
         """
         user = self.request.user
-        if user.is_staff or getattr(user, 'role', '') == 'ADMIN':
-            return Ticket.objects.all()
-        if getattr(user, 'role', '') == 'AGENT':
+        if is_platform_admin(user):
+            qs = Ticket.objects.select_related('user', 'agent_flight_inventory').all()
+        elif getattr(user, 'role', '') == 'AGENT':
             from django.db.models import Q
-            return Ticket.objects.filter(Q(user=user) | Q(agent_flight_inventory__agent=user))
-        return Ticket.objects.filter(user=user)
+            qs = Ticket.objects.select_related('user', 'agent_flight_inventory').filter(
+                Q(user=user) | Q(agent_flight_inventory__agent=user)
+            )
+        else:
+            qs = Ticket.objects.select_related('user', 'agent_flight_inventory').filter(user=user)
+
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            qs = qs.filter(status=status_param.upper())
+
+        origin = self.request.query_params.get('origin')
+        if origin:
+            qs = qs.filter(origin__iexact=origin)
+
+        destination = self.request.query_params.get('destination')
+        if destination:
+            qs = qs.filter(destination__iexact=destination)
+
+        pnr = self.request.query_params.get('pnr')
+        if pnr:
+            qs = qs.filter(pnr_number__icontains=pnr)
+
+        search = self.request.query_params.get('search')
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(pnr_number__icontains=search)
+                | Q(ticket_number__icontains=search)
+                | Q(booking_ref__icontains=search)
+                | Q(flight_number__icontains=search)
+                | Q(origin__icontains=search)
+                | Q(destination__icontains=search)
+                | Q(airline_name__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(user__username__icontains=search)
+                | Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+            )
+
+        return qs.order_by('-created_at')
 
     @action(detail=False, methods=['post'], url_path='buy')
     def buy(self, request, *args, **kwargs):
@@ -283,14 +323,20 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             refund_amount = paid_amount
 
         ticket.cancellation_data = {
-            "cancelled_by": "User" if cancellation_type == 0 else "Airline",
+            "cancelled_by": "Admin" if is_platform_admin(request.user) else ("User" if cancellation_type == 0 else "Airline"),
             "cancellation_type": cancellation_type,
             "cancel_code": cancel_code,
             "paid_amount": paid_amount,
             "airline_penalty": airline_penalty,
             "service_fee": service_fee,
             "refund_amount": refund_amount,
-            "remarks": remarks
+            "remarks": remarks,
+            "actor_user_id": str(getattr(request.user, "id", "")),
+            "actor_username": getattr(request.user, "username", ""),
+            "actor_email": getattr(request.user, "email", ""),
+            "actor_role": getattr(request.user, "role", ""),
+            "ticket_owner_id": str(getattr(ticket.user, "id", "")),
+            "ticket_owner_email": getattr(ticket.user, "email", ""),
         }
 
         # Always mark as cancelled locally even if GDS is unreachable (offline tickets)
@@ -411,7 +457,7 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         which transitions the ticket to CONFIRMED.
         """
         user = request.user
-        if not (user.is_staff or getattr(user, 'role', '') in ('ADMIN', 'AGENT')):
+        if not (is_platform_admin(user) or getattr(user, 'role', '') == 'AGENT'):
             return Response(
                 {'detail': 'Only agents or admins can fulfill agent bookings.'},
                 status=status.HTTP_403_FORBIDDEN
@@ -424,7 +470,7 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if not (user.is_staff or getattr(user, 'role', '') == 'ADMIN' or ticket.agent_flight_inventory.agent == user):
+        if not (is_platform_admin(user) or ticket.agent_flight_inventory.agent == user):
             return Response(
                 {'detail': 'You do not have permission to fulfill this booking.'},
                 status=status.HTTP_403_FORBIDDEN
@@ -461,7 +507,7 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         This transitions the ticket to CANCELLED and restores seats in the inventory.
         """
         user = request.user
-        if not (user.is_staff or getattr(user, 'role', '') in ('ADMIN', 'AGENT')):
+        if not (is_platform_admin(user) or getattr(user, 'role', '') == 'AGENT'):
             return Response(
                 {'detail': 'Only agents or admins can cancel agent bookings.'},
                 status=status.HTTP_403_FORBIDDEN
@@ -474,7 +520,7 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if not (user.is_staff or getattr(user, 'role', '') == 'ADMIN' or ticket.agent_flight_inventory.agent == user):
+        if not (is_platform_admin(user) or ticket.agent_flight_inventory.agent == user):
             return Response(
                 {'detail': 'You do not have permission to cancel this booking.'},
                 status=status.HTTP_403_FORBIDDEN
@@ -500,15 +546,65 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         
         paid_amount = float(ticket.total_amount)
         ticket.cancellation_data = {
-            "cancelled_by": "Agent",
+            "cancelled_by": "Agent" if not is_platform_admin(user) else "Admin",
             "cancellation_type": 1,
             "paid_amount": paid_amount,
             "airline_penalty": 0.0,
             "service_fee": 0.0,
             "refund_amount": paid_amount,
-            "remarks": remarks
+            "remarks": remarks,
+            "actor_user_id": str(getattr(user, "id", "")),
+            "actor_username": getattr(user, "username", ""),
         }
         ticket.save(update_fields=['status', 'agent_cancellation_reason', 'cancellation_data', 'updated_at'])
 
         response_serializer = self.get_serializer(ticket)
         return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='admin-status', url_name='admin-status')
+    def admin_status(self, request, *args, **kwargs):
+        """
+        POST /api/v1/tickets/{id}/admin-status/
+        Body: { "status": "CONFIRMED"|"PENDING"|"FAILED"|"CANCELLED", "remarks": "..." }
+        Platform admins only — used from Admin API Booking to force-update status.
+        """
+        if not is_platform_admin(request.user):
+            return Response(
+                {'detail': 'Only admins can update ticket status.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        ticket = self.get_object()
+        new_status = str(request.data.get('status', '')).upper().strip()
+        allowed = {
+            Ticket.STATUS_PENDING,
+            Ticket.STATUS_CONFIRMED,
+            Ticket.STATUS_FAILED,
+            Ticket.STATUS_CANCELLED,
+        }
+        if new_status not in allowed:
+            return Response(
+                {'detail': f'Invalid status. Allowed: {", ".join(sorted(allowed))}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        remarks = request.data.get('remarks') or f'Status set to {new_status} by admin'
+        previous = ticket.status
+        ticket.status = new_status
+
+        meta = dict(ticket.cancellation_data or {}) if isinstance(ticket.cancellation_data, dict) else {}
+        meta['admin_status_updates'] = meta.get('admin_status_updates') or []
+        if not isinstance(meta['admin_status_updates'], list):
+            meta['admin_status_updates'] = []
+        meta['admin_status_updates'].append({
+            'from': previous,
+            'to': new_status,
+            'remarks': remarks,
+            'actor_user_id': str(getattr(request.user, 'id', '')),
+            'actor_username': getattr(request.user, 'username', ''),
+            'actor_email': getattr(request.user, 'email', ''),
+        })
+        ticket.cancellation_data = meta
+        ticket.save(update_fields=['status', 'cancellation_data', 'updated_at'])
+
+        return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)

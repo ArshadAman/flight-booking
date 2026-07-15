@@ -5,11 +5,20 @@ class TicketSerializer(serializers.ModelSerializer):
     """
     ModelSerializer mapping all details of a passenger ticket.
     """
+    user_email = serializers.SerializerMethodField()
+    user_name = serializers.SerializerMethodField()
+    passenger_count = serializers.SerializerMethodField()
+    is_agent_booking = serializers.SerializerMethodField()
+
     class Meta:
         model = Ticket
         fields = [
             'id',
             'user',
+            'user_email',
+            'user_name',
+            'passenger_count',
+            'is_agent_booking',
             'agent_flight_inventory',
             'agent_cancellation_reason',
             'pnr_number',
@@ -44,9 +53,31 @@ class TicketSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id',
             'user',
+            'user_email',
+            'user_name',
+            'passenger_count',
+            'is_agent_booking',
             'created_at',
             'updated_at'
         ]
+
+    def get_user_email(self, obj):
+        user = getattr(obj, 'user', None)
+        return getattr(user, 'email', None) or ''
+
+    def get_user_name(self, obj):
+        user = getattr(obj, 'user', None)
+        if not user:
+            return ''
+        name = f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip()
+        return name or getattr(user, 'username', '') or getattr(user, 'email', '') or ''
+
+    def get_passenger_count(self, obj):
+        data = obj.passengers_data or []
+        return len(data) if isinstance(data, list) else 0
+
+    def get_is_agent_booking(self, obj):
+        return bool(obj.agent_flight_inventory_id)
 
 
 class PassengerDetailsSerializer(serializers.Serializer):
