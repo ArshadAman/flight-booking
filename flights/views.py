@@ -214,8 +214,9 @@ class AgentFlightInventoryViewSet(viewsets.ModelViewSet):
             request._full_data = data
         return super().partial_update(request, *args, **kwargs)
 
-    @action(detail=False, methods=["get"], url_path="export")
+    @action(detail=False, methods=["get"], url_path="export", renderer_classes=[])
     def export(self, request, *args, **kwargs):
+
         """Citizenplane-style inventory export (CSV or JSON)."""
         fmt = (request.query_params.get("format") or "csv").lower()
         qs = self.get_queryset()
