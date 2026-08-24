@@ -47,6 +47,7 @@ class TicketSerializer(serializers.ModelSerializer):
             'passengers_data',
             'ssr_data',
             'cancellation_data',
+            'booking_channel',
             'created_at',
             'updated_at'
         ]
@@ -234,10 +235,10 @@ class TicketCancelRequestSerializer(serializers.Serializer):
     Serializer for ticket cancellation requests.
     """
     remarks = serializers.CharField(
-        max_length=256,
-        required=False,
-        default="Customer requested cancellation",
-        help_text="Optional reason for cancellation."
+        max_length=512,
+        required=True,
+        allow_blank=False,
+        help_text="Required reason / remarks for cancellation."
     )
     cancellation_type = serializers.IntegerField(
         required=False,

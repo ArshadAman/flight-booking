@@ -236,35 +236,41 @@ class ProviderService:
         masked_payload["Auth_Header"]["Password"] = "********"
         logger.info(f"Outgoing FlyShop Search Request [ID: {request_id}]: {masked_payload}")
 
+        search_key = f"agent-only-{request_id}"
+        normalized_flights = []
+
         try:
             response = requests.post(endpoint, json=payload, timeout=60)
             response.raise_for_status()
             response_json = response.json()
+
+            # Log incoming response metadata
+            logger.info(f"Incoming FlyShop Search Response [ID: {request_id}] status_code={response.status_code}")
+
+            # Check response headers for provider-specific errors
+            response_header = response_json.get('Response_Header', {})
+            error_code = response_header.get('Error_Code', '0000')
+            error_desc = response_header.get('Error_Desc', 'SUCCESS')
+
+            if error_code != '0000' and error_code != '000':
+                logger.error(
+                    f"FlyShop search failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}. "
+                    "Falling back to published agent inventory."
+                )
+            else:
+                search_key = response_json.get('Search_Key') or search_key
+                raw_trip_details = response_json.get('TripDetails') or []
+                normalized_flights = cls._normalize_trip_details(raw_trip_details)
         except requests.RequestException as e:
-            logger.error(f"HTTP Connection failure to FlyShop [ID: {request_id}]: {str(e)}")
-            raise ProviderAPIException("Unable to connect to the external flight service provider.")
+            logger.error(
+                f"HTTP Connection failure to FlyShop [ID: {request_id}]: {str(e)}. "
+                "Falling back to published agent inventory."
+            )
         except ValueError:
-            logger.error(f"Invalid JSON response returned from FlyShop [ID: {request_id}]")
-            raise ProviderAPIException("Received invalid response from the flight service provider.")
-
-        # Log incoming response metadata
-        logger.info(f"Incoming FlyShop Search Response [ID: {request_id}] status_code={response.status_code}")
-
-        # Check response headers for provider-specific errors
-        response_header = response_json.get('Response_Header', {})
-        error_code = response_header.get('Error_Code', '0000')
-        error_desc = response_header.get('Error_Desc', 'SUCCESS')
-
-        if error_code != '0000' and error_code != '000':
-            logger.error(f"FlyShop search failed [ID: {request_id}] Code: {error_code}, Desc: {error_desc}")
-            raise ProviderAPIException(f"Provider Error: {error_desc} (Code: {error_code})")
-
-        # Normalize the raw results
-        search_key = response_json.get('Search_Key')
-        raw_trip_details = response_json.get('TripDetails', [])
-
-        raw_trip_details = response_json.get('TripDetails') or []
-        normalized_flights = cls._normalize_trip_details(raw_trip_details)
+            logger.error(
+                f"Invalid JSON response returned from FlyShop [ID: {request_id}]. "
+                "Falling back to published agent inventory."
+            )
 
         # Merge and compare with Agent Flight Inventories
         from flights.models import AgentFlightInventory
@@ -274,7 +280,9 @@ class ProviderService:
         outbound_agent_candidates = AgentFlightInventory.objects.filter(
             origin=origin,
             destination=destination,
-            seats_available__gte=passenger_count
+            seats_available__gte=passenger_count,
+            is_published=True,
+            is_enabled=True,
         )
 
         inbound_agent_candidates = AgentFlightInventory.objects.none()
@@ -282,12 +290,18 @@ class ProviderService:
             inbound_agent_candidates = AgentFlightInventory.objects.filter(
                 origin=destination,
                 destination=origin,
-                seats_available__gte=passenger_count
+                seats_available__gte=passenger_count,
+                is_published=True,
+                is_enabled=True,
             )
 
         # Filter by local departure date in memory to solve timezone matching issues
+        from flights.inventory_rules import inventory_is_restricted
+
         outbound_agent_list = []
         for af in outbound_agent_candidates:
+            if af.sellable_seats < passenger_count or inventory_is_restricted(af):
+                continue
             tz = get_airport_timezone(af.origin)
             local_dep_dt = af.departure_datetime.astimezone(tz)
             if local_dep_dt.date() == travel_date:
@@ -295,6 +309,8 @@ class ProviderService:
 
         inbound_agent_list = []
         for af in inbound_agent_candidates:
+            if af.sellable_seats < passenger_count or inventory_is_restricted(af):
+                continue
             tz = get_airport_timezone(af.origin)
             local_dep_dt = af.departure_datetime.astimezone(tz)
             if local_dep_dt.date() == return_date:
@@ -532,6 +548,9 @@ class ProviderService:
                 af = AgentFlightInventory.objects.get(id=agent_id)
             except AgentFlightInventory.DoesNotExist:
                 raise ProviderAPIException("Selected agent flight inventory no longer exists.")
+
+            if not getattr(af, "is_published", True):
+                raise ProviderAPIException("This inventory listing is no longer published for sale.")
 
             if af.seats_available <= 0:
                 raise ProviderAPIException("No seats available on this agent flight.")

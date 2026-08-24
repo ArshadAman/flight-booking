@@ -19,10 +19,15 @@ class IsAdminUser(permissions.BasePermission):
 
 class IsAgentUser(permissions.BasePermission):
     """
-    Allows access only to agent users.
+    Allows access to agent users and platform admins (for inventory ops).
     """
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.role == 'AGENT')
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "role", "") == "AGENT":
+            return True
+        return is_platform_admin(user)
 
 class IsCustomerUser(permissions.BasePermission):
     """

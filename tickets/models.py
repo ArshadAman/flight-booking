@@ -185,6 +185,20 @@ class Ticket(BaseModel):
         help_text="Metadata regarding ticket cancellation charges, initiator, and refund amounts."
     )
 
+    CHANNEL_B2C = "B2C"
+    CHANNEL_B2B = "B2B"
+    CHANNEL_CHOICES = [
+        (CHANNEL_B2C, "B2C"),
+        (CHANNEL_B2B, "B2B"),
+    ]
+    booking_channel = models.CharField(
+        max_length=8,
+        choices=CHANNEL_CHOICES,
+        default=CHANNEL_B2C,
+        blank=True,
+        help_text="Commercial channel categorization for admin reporting (B2B vs B2C).",
+    )
+
     class Meta:
         verbose_name = 'Ticket'
         verbose_name_plural = 'Tickets'

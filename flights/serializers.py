@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from datetime import date
-from .models import AgentFlightInventory, FlightInventory
+from .models import AgentFlightInventory, FlightInventory, InventoryHold
 
 
 class TripSegmentSerializer(serializers.Serializer):
@@ -326,8 +326,9 @@ class InventorySegmentSerializer(serializers.Serializer):
 
 class FlightInventoryCreateSerializer(serializers.ModelSerializer):
     segments = InventorySegmentSerializer(many=True, write_only=True)
-    apis_required = serializers.BooleanField(required=False, default=False, write_only=True)
-    policies = serializers.JSONField(required=False, default=dict, write_only=True)
+    apis_required = serializers.BooleanField(required=False, default=False)
+    policies = serializers.JSONField(required=False, default=dict)
+    is_published = serializers.BooleanField(required=False, default=True)
 
     class Meta:
         model = AgentFlightInventory
@@ -347,9 +348,11 @@ class FlightInventoryCreateSerializer(serializers.ModelSerializer):
             "is_refundable",
             "baggage_check_in",
             "baggage_hand",
+            "is_published",
             "apis_required",
             "policies",
             "segments",
+            "sales_closing_datetime",
             "created_at",
             "updated_at",
         ]
@@ -384,8 +387,6 @@ class FlightInventoryCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         segments = validated_data.pop("segments", [])
-        validated_data.pop("apis_required", None)
-        validated_data.pop("policies", None)
         normalized_segments = []
 
         for segment in segments:
@@ -397,13 +398,14 @@ class FlightInventoryCreateSerializer(serializers.ModelSerializer):
 
         validated_data["agent"] = self.context["request"].user
         validated_data["segments"] = normalized_segments
+        validated_data.setdefault("is_published", True)
         return AgentFlightInventory.objects.create(**validated_data)
 
 
 class FlightInventoryResponseSerializer(serializers.ModelSerializer):
     segments_data = serializers.JSONField(source="segments")
-    apis_required = serializers.BooleanField(default=False)
-    policies = serializers.JSONField(default=dict)
+    sellable_seats = serializers.IntegerField(read_only=True)
+    agent_username = serializers.CharField(source="agent.username", read_only=True)
 
     class Meta:
         model = AgentFlightInventory
@@ -418,6 +420,62 @@ class FlightInventoryResponseSerializer(serializers.ModelSerializer):
             "arrival_datetime",
             "price",
             "seats_available",
+            "seats_held",
+            "waitlist_count",
+            "sellable_seats",
+            "cabin_class",
+            "duration",
+            "is_refundable",
+            "baggage_check_in",
+            "baggage_hand",
+            "is_published",
+            "is_enabled",
+            "apis_required",
+            "policies",
+            "segments_data",
+            "sales_closing_datetime",
+            "agent",
+            "agent_username",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class AgentFlightInventorySerializer(serializers.ModelSerializer):
+    agent_username = serializers.CharField(source='agent.username', read_only=True)
+    sellable_seats = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = AgentFlightInventory
+        fields = '__all__'
+        read_only_fields = ('id', 'agent', 'created_at', 'updated_at')
+
+
+class PublicForSaleInventorySerializer(serializers.ModelSerializer):
+    """Public marketplace payload for For Sale storefronts."""
+    segments_data = serializers.JSONField(source="segments")
+    flight_key = serializers.SerializerMethodField()
+    fare_id = serializers.SerializerMethodField()
+    search_key = serializers.SerializerMethodField()
+    sellable_seats = serializers.IntegerField(read_only=True)
+    agent_username = serializers.CharField(source="agent.username", read_only=True)
+
+    class Meta:
+        model = AgentFlightInventory
+        fields = [
+            "id",
+            "airline_code",
+            "airline_name",
+            "flight_number",
+            "origin",
+            "destination",
+            "departure_datetime",
+            "arrival_datetime",
+            "price",
+            "seats_available",
+            "seats_held",
+            "waitlist_count",
+            "sellable_seats",
             "cabin_class",
             "duration",
             "is_refundable",
@@ -426,15 +484,47 @@ class FlightInventoryResponseSerializer(serializers.ModelSerializer):
             "apis_required",
             "policies",
             "segments_data",
+            "sales_closing_datetime",
+            "flight_key",
+            "fare_id",
+            "search_key",
+            "agent",
+            "agent_username",
+        ]
+
+    def get_flight_key(self, obj):
+        return f"agent-{obj.id}"
+
+    def get_fare_id(self, obj):
+        return f"agent-fare-{obj.id}"
+
+    def get_search_key(self, obj):
+        return f"agent-marketplace-{obj.id}"
+
+
+class InventoryHoldSerializer(serializers.ModelSerializer):
+    inventory_route = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InventoryHold
+        fields = [
+            "id",
+            "inventory",
+            "inventory_route",
+            "user",
+            "status",
+            "seats",
+            "contact_name",
+            "contact_email",
+            "contact_mobile",
+            "notes",
+            "expires_at",
             "created_at",
             "updated_at",
         ]
+        read_only_fields = ["id", "user", "created_at", "updated_at", "inventory_route"]
 
+    def get_inventory_route(self, obj):
+        inv = obj.inventory
+        return f"{inv.origin}-{inv.destination} {inv.flight_number}"
 
-class AgentFlightInventorySerializer(serializers.ModelSerializer):
-    agent_username = serializers.CharField(source='agent.username', read_only=True)
-
-    class Meta:
-        model = AgentFlightInventory
-        fields = '__all__'
-        read_only_fields = ('id', 'agent', 'created_at', 'updated_at')

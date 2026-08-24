@@ -96,11 +96,34 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            if not getattr(af, "is_published", True):
+                return Response(
+                    {'detail': 'This inventory listing is no longer published for sale.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not getattr(af, "is_enabled", True):
+                return Response(
+                    {'detail': 'This inventory listing has been disabled by the platform.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                from flights.inventory_rules import inventory_is_restricted
+                if inventory_is_restricted(af):
+                    return Response(
+                        {'detail': 'This airline or route is currently blocked for offline inventory.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except Exception:
+                pass
+
             passengers = serializer.validated_data.get('passengers', [])
             pax_count = len(passengers)
-            if af.seats_available < pax_count:
+            sellable = getattr(af, "sellable_seats", af.seats_available)
+            if sellable < pax_count:
                 return Response(
-                    {'detail': f'Not enough seats available. Only {af.seats_available} seats remaining.'},
+                    {'detail': f'Not enough seats available. Only {sellable} seats remaining.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -255,6 +278,13 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         remarks = serializer.validated_data.get('remarks', 'Customer requested cancellation')
         cancellation_type = serializer.validated_data.get('cancellation_type', 0)
         cancel_code = serializer.validated_data.get('cancel_code', '005')
+        admin_actor = is_platform_admin(request.user)
+
+        if not str(remarks).strip():
+            return Response(
+                {'detail': 'Cancellation remarks are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Check ticket isn't already cancelled
         if ticket.status == Ticket.STATUS_CANCELLED:
@@ -262,6 +292,23 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                 {'detail': 'Ticket is already cancelled.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # Block cancel after departure / boarding time
+        if ticket.departure_datetime:
+            from django.utils import timezone
+            dep = ticket.departure_datetime
+            if timezone.is_naive(dep):
+                dep = timezone.make_aware(dep, timezone.get_current_timezone())
+            if timezone.now() >= dep:
+                return Response(
+                    {
+                        'detail': (
+                            'This flight has already departed. '
+                            'Cancellation is no longer available.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         # Attempt GDS cancellation — gracefully fall back to local cancel if GDS fails
         gds_cancelled = False
@@ -311,26 +358,42 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             inventory.save(update_fields=['seats_available', 'updated_at'])
             gds_cancelled = True
 
-        # MMT-style Cancellation Fee & Refund Calculations
+        # Refund rules:
+        # - Admin cancel → 100% refund (and if GDS cancel fails, still 100%)
+        # - Customer / user-initiated (cancellation_type=0) → fare-rule penalties
+        # - Airline-initiated (cancellation_type=1) → 100% refund
         paid_amount = float(ticket.total_amount)
-        if cancellation_type == 0:  # Cancelled by User
-            airline_penalty = min(3000.0 * pax_count, float(ticket.basic_amount or 0.0))
-            service_fee = 300.0 * pax_count
-            refund_amount = max(0.0, paid_amount - (airline_penalty + service_fee))
-        else:  # Cancelled by Airline (Flight Rescheduled / Cancelled)
+        if admin_actor or cancellation_type == 1 or (not gds_cancelled and admin_actor):
             airline_penalty = 0.0
             service_fee = 0.0
             refund_amount = paid_amount
+            cancelled_by = "Admin" if admin_actor else "Airline"
+        else:
+            airline_penalty = min(3000.0 * pax_count, float(ticket.basic_amount or 0.0))
+            service_fee = 300.0 * pax_count
+            refund_amount = max(0.0, paid_amount - (airline_penalty + service_fee))
+            cancelled_by = "User"
+
+        # If GDS cancel failed on an admin-triggered cancel, force full refund explicitly
+        if admin_actor and not gds_cancelled:
+            airline_penalty = 0.0
+            service_fee = 0.0
+            refund_amount = paid_amount
+            cancelled_by = "Admin"
 
         ticket.cancellation_data = {
-            "cancelled_by": "Admin" if is_platform_admin(request.user) else ("User" if cancellation_type == 0 else "Airline"),
-            "cancellation_type": cancellation_type,
+            "cancelled_by": cancelled_by,
+            "cancellation_type": 1 if (admin_actor or cancellation_type == 1) else 0,
             "cancel_code": cancel_code,
             "paid_amount": paid_amount,
             "airline_penalty": airline_penalty,
             "service_fee": service_fee,
             "refund_amount": refund_amount,
+            "refund_status": "Processed to Source" if refund_amount > 0 else "No refund",
             "remarks": remarks,
+            "gds_cancelled": gds_cancelled,
+            "gds_error": gds_error,
+            "failure_reason": gds_error if not gds_cancelled else None,
             "actor_user_id": str(getattr(request.user, "id", "")),
             "actor_username": getattr(request.user, "username", ""),
             "actor_email": getattr(request.user, "email", ""),
@@ -407,6 +470,22 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                 {"detail": "SSRs can only be added to confirmed bookings."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        if ticket.departure_datetime:
+            from django.utils import timezone
+            dep = ticket.departure_datetime
+            if timezone.is_naive(dep):
+                dep = timezone.make_aware(dep, timezone.get_current_timezone())
+            if timezone.now() >= dep:
+                return Response(
+                    {
+                        "detail": (
+                            "This flight has already departed. "
+                            "Modifications are no longer available."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         booking_ssr_details = request.data.get('BookingSSRDetails')
         if not booking_ssr_details or not isinstance(booking_ssr_details, list):
@@ -592,6 +671,12 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         previous = ticket.status
         ticket.status = new_status
 
+        channel = str(request.data.get('booking_channel') or request.data.get('channel') or '').upper().strip()
+        update_fields = ['status', 'cancellation_data', 'updated_at']
+        if channel in {Ticket.CHANNEL_B2B, Ticket.CHANNEL_B2C}:
+            ticket.booking_channel = channel
+            update_fields.append('booking_channel')
+
         meta = dict(ticket.cancellation_data or {}) if isinstance(ticket.cancellation_data, dict) else {}
         meta['admin_status_updates'] = meta.get('admin_status_updates') or []
         if not isinstance(meta['admin_status_updates'], list):
@@ -600,11 +685,98 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             'from': previous,
             'to': new_status,
             'remarks': remarks,
+            'booking_channel': channel or ticket.booking_channel,
             'actor_user_id': str(getattr(request.user, 'id', '')),
             'actor_username': getattr(request.user, 'username', ''),
             'actor_email': getattr(request.user, 'email', ''),
         })
+        if new_status == Ticket.STATUS_FAILED:
+            meta['failure_reason'] = remarks
         ticket.cancellation_data = meta
-        ticket.save(update_fields=['status', 'cancellation_data', 'updated_at'])
+        ticket.save(update_fields=update_fields)
 
         return Response(self.get_serializer(ticket).data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='add-pnr')
+    def add_pnr(self, request, *args, **kwargs):
+        """
+        POST /api/v1/tickets/add-pnr/
+        Agents manually link a PNR to an existing inventory item.
+        Creates a CONFIRMED ticket record linked to the inventory.
+        Required body: { inventory_id, pnr_number, passenger_name, total_amount? }
+        """
+        from flights.models import AgentFlightInventory
+        from accounts.permissions import IsAgentUser
+
+        if not (getattr(request.user, 'role', '') in ('AGENT', 'ADMIN') or request.user.is_staff):
+            return Response({'detail': 'Only agents can add PNRs.'}, status=status.HTTP_403_FORBIDDEN)
+
+        inventory_id = request.data.get('inventory_id')
+        pnr_number = (request.data.get('pnr_number') or '').strip().upper()
+        passenger_name = (request.data.get('passenger_name') or '').strip()
+        total_amount = request.data.get('total_amount', 0)
+        ticket_number = (request.data.get('ticket_number') or '').strip()
+        notes = (request.data.get('notes') or '').strip()
+
+        if not inventory_id:
+            return Response({'detail': 'inventory_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not pnr_number:
+            return Response({'detail': 'pnr_number is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            inv = AgentFlightInventory.objects.get(id=inventory_id)
+        except AgentFlightInventory.DoesNotExist:
+            return Response({'detail': 'Inventory not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Only inventory owner or admin can add PNR
+        if not (request.user.is_staff or getattr(request.user, 'role', '') == 'ADMIN'):
+            if inv.agent != request.user:
+                return Response({'detail': 'You can only add PNRs to your own inventory.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Prevent duplicate PNR on same inventory
+        if Ticket.objects.filter(agent_flight_inventory=inv, pnr_number=pnr_number).exists():
+            return Response({'detail': f'PNR {pnr_number} already linked to this flight.'}, status=status.HTTP_409_CONFLICT)
+
+        passengers_data = []
+        if passenger_name:
+            name_parts = passenger_name.split()
+            passengers_data = [{
+                'first_name': name_parts[0] if name_parts else passenger_name,
+                'last_name': ' '.join(name_parts[1:]) if len(name_parts) > 1 else '',
+                'type': 'Adult',
+            }]
+
+        ticket = Ticket.objects.create(
+            user=request.user,
+            agent_flight_inventory=inv,
+            pnr_number=pnr_number,
+            ticket_number=ticket_number or None,
+            status=Ticket.STATUS_CONFIRMED,
+            origin=inv.origin,
+            destination=inv.destination,
+            departure_datetime=inv.departure_datetime,
+            arrival_datetime=inv.arrival_datetime,
+            airline_code=inv.airline_code,
+            airline_name=inv.airline_name,
+            flight_number=inv.flight_number,
+            cabin_class=inv.cabin_class,
+            total_amount=total_amount,
+            basic_amount=total_amount,
+            currency='INR',
+            baggage_check_in=inv.baggage_check_in,
+            baggage_hand=inv.baggage_hand,
+            is_refundable=inv.is_refundable,
+            passengers_data=passengers_data,
+            segments_data=inv.segments or [],
+            booking_channel='B2B',
+        )
+        # Reduce available seats by 1 for manually added PNR
+        if inv.seats_available > 0:
+            inv.seats_available = max(0, inv.seats_available - 1)
+            inv.save(update_fields=['seats_available', 'updated_at'])
+
+        logger.info(
+            'Agent %s manually added PNR %s to inventory %s',
+            request.user.username, pnr_number, inventory_id,
+        )
+        return Response(self.get_serializer(ticket).data, status=status.HTTP_201_CREATED)
