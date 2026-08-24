@@ -18,6 +18,6 @@ urlpatterns = [
     path("revalidate/", FlightRevalidateView.as_view(), name="flight_revalidate"),
     path("ssr/", FlightSSRView.as_view(), name="flight_ssr"),
     path("for-sale/", PublicForSaleInventoryView.as_view(), name="for_sale_inventory"),
-    path("inventory/", AgentFlightInventoryViewSet.as_view({"get": "list", "post": "create"}), name="flight_inventory"),
     path("", include(router.urls)),
 ]
+
