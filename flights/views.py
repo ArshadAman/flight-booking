@@ -181,6 +181,20 @@ class InventoryHoldViewSet(viewsets.ModelViewSet):
         return Response(InventoryHoldSerializer(hold).data)
 
 
+from rest_framework.renderers import BaseRenderer, JSONRenderer
+import csv
+import io
+
+class PassthroughCSVRenderer(BaseRenderer):
+    media_type = "text/csv"
+    format = "csv"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if isinstance(data, (str, bytes)):
+            return data
+        return str(data)
+
+
 class AgentFlightInventoryViewSet(viewsets.ModelViewSet):
     """ViewSet for agents to manage their pre-purchased flight inventory."""
 
@@ -214,9 +228,8 @@ class AgentFlightInventoryViewSet(viewsets.ModelViewSet):
             request._full_data = data
         return super().partial_update(request, *args, **kwargs)
 
-    @action(detail=False, methods=["get"], url_path="export", renderer_classes=[])
+    @action(detail=False, methods=["get"], url_path="export", renderer_classes=[PassthroughCSVRenderer, JSONRenderer])
     def export(self, request, *args, **kwargs):
-
         """Citizenplane-style inventory export (CSV or JSON)."""
         fmt = (request.query_params.get("format") or "csv").lower()
         qs = self.get_queryset()
@@ -265,6 +278,7 @@ class AgentFlightInventoryViewSet(viewsets.ModelViewSet):
         response = HttpResponse(buffer.getvalue(), content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="inventory_export.csv"'
         return response
+
 
     @action(detail=False, methods=["get"], url_path="analytics")
     def analytics(self, request, *args, **kwargs):
