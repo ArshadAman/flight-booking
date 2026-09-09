@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import InventoryRestriction
+from .models import InventoryRestriction, AgentAuditLog
 
 
 class InventoryRestrictionSerializer(serializers.ModelSerializer):
@@ -41,3 +41,27 @@ class InventoryRestrictionSerializer(serializers.ModelSerializer):
         if scope == InventoryRestriction.SCOPE_ROUTE and (not origin or not dest):
             raise serializers.ValidationError({"origin": "Origin and destination are required for route blocks."})
         return attrs
+
+
+class AgentAuditLogSerializer(serializers.ModelSerializer):
+    by_agent = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AgentAuditLog
+        fields = (
+            "id",
+            "action_type",
+            "entry",
+            "reference",
+            "metadata",
+            "by_agent",
+            "created_at",
+        )
+        read_only_fields = fields
+
+    def get_by_agent(self, obj):
+        user = obj.performed_by or obj.agent
+        if not user:
+            return "AGT"
+        base = "".join(ch for ch in f"{user.first_name}{user.last_name}{user.username}" if ch.isalpha())
+        return (base.upper()[:3] or "AGT")

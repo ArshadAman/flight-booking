@@ -1,7 +1,7 @@
-from rest_framework import viewsets, permissions
-from accounts.permissions import IsAdminUser
-from .models import InventoryRestriction
-from .serializers import InventoryRestrictionSerializer
+from rest_framework import viewsets, permissions, generics
+from accounts.permissions import IsAdminUser, IsAgentUser, is_platform_admin
+from .models import InventoryRestriction, AgentAuditLog
+from .serializers import InventoryRestrictionSerializer, AgentAuditLogSerializer
 
 
 class InventoryRestrictionViewSet(viewsets.ModelViewSet):
@@ -20,3 +20,20 @@ class InventoryRestrictionViewSet(viewsets.ModelViewSet):
         if agent:
             qs = qs.filter(agent_id=agent)
         return qs
+
+
+class AgentHistoryListView(generics.ListAPIView):
+    """
+    GET /api/v1/agents/history/
+    Offline portal History feed for the authenticated agent.
+    """
+
+    serializer_class = AgentAuditLogSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = AgentAuditLog.objects.select_related("agent", "performed_by").all()
+        if is_platform_admin(user) and self.request.query_params.get("agent"):
+            return qs.filter(agent_id=self.request.query_params.get("agent"))
+        return qs.filter(agent=user)
