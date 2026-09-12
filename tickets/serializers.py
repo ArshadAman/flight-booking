@@ -102,10 +102,20 @@ class PassengerDetailsSerializer(serializers.Serializer):
         max_length=100,
         help_text="Passenger last name."
     )
-    gender = serializers.IntegerField(
-        default=0,
-        help_text="Gender mapping (0 = Male, 1 = Female)."
+    gender = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="0",
+        help_text="Gender: 0/M/Male or 1/F/Female.",
     )
+
+    def validate_gender(self, value):
+        raw = str(value).strip().upper() if value is not None else "0"
+        if raw in {"0", "M", "MALE"}:
+            return 0
+        if raw in {"1", "F", "FEMALE"}:
+            return 1
+        raise serializers.ValidationError("Gender must be 0/M or 1/F.")
     dob = serializers.DateField(
         required=False,
         allow_null=True,
@@ -117,6 +127,13 @@ class PassengerDetailsSerializer(serializers.Serializer):
         allow_blank=True,
         allow_null=True,
         help_text="Passport number (required for international sectors)."
+    )
+    ticket_number = serializers.CharField(
+        max_length=50,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Optional per-passenger airline ticket number.",
     )
     outbound_meal = serializers.CharField(
         max_length=100,

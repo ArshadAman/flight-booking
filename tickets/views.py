@@ -136,14 +136,17 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             for pax in passengers:
                 dob_val = pax.get('dob')
                 dob_str = dob_val.strftime("%Y-%m-%d") if dob_val else None
+                gender_raw = pax.get('gender', 0)
+                gender_code = "M" if gender_raw in (0, "0", "M", "m", "Male", "male") else "F"
                 pax_entry = {
                     "title": pax.get('title', 'Mr'),
                     "first_name": pax.get('first_name'),
                     "last_name": pax.get('last_name'),
-                    "gender": "M" if pax.get('gender') == 0 else "F",
+                    "gender": gender_code,
                     "dob": dob_str,
                     "passport_number": pax.get('passport_number'),
-                    "pancard_number": pax.get('pancard_number')
+                    "pancard_number": pax.get('pancard_number'),
+                    "ticket_number": (pax.get('ticket_number') or None),
                 }
                 passengers_data.append(pax_entry)
 
@@ -573,7 +576,27 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
         ticket.pnr_number = pnr_number
         ticket.ticket_number = ticket_number
         ticket.status = Ticket.STATUS_CONFIRMED
-        ticket.save(update_fields=['pnr_number', 'ticket_number', 'status', 'updated_at'])
+        # Stamp ticket number onto each passenger for portal PNR Booking display
+        passengers = list(ticket.passengers_data or [])
+        if passengers:
+            updated = []
+            for pax in passengers:
+                row = dict(pax) if isinstance(pax, dict) else {"first_name": "Passenger"}
+                if not row.get("ticket_number"):
+                    row["ticket_number"] = ticket_number
+                updated.append(row)
+            ticket.passengers_data = updated
+            ticket.save(
+                update_fields=[
+                    "pnr_number",
+                    "ticket_number",
+                    "status",
+                    "passengers_data",
+                    "updated_at",
+                ]
+            )
+        else:
+            ticket.save(update_fields=["pnr_number", "ticket_number", "status", "updated_at"])
 
         response_serializer = self.get_serializer(ticket)
         return Response(response_serializer.data, status=status.HTTP_200_OK)

@@ -372,6 +372,7 @@ class ProviderService:
                         "arrival_datetime": arr_formatted,
                         "duration": seg.get("duration", af.duration),
                         "stop_over": seg.get("stop_over"),
+                        "technical_stop": seg.get("technical_stop"),
                         "return_flight": is_ret
                     })
             else:
@@ -604,6 +605,7 @@ class ProviderService:
                         "arrival_datetime": arr_formatted,
                         "duration": seg.get("duration", af.duration),
                         "stop_over": seg.get("stop_over"),
+                        "technical_stop": seg.get("technical_stop"),
                         "return_flight": False
                     })
             else:

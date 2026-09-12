@@ -219,6 +219,7 @@ class FlightSegmentSerializer(serializers.Serializer):
     arrival_datetime = serializers.CharField(max_length=64, allow_blank=True)
     duration = serializers.CharField(max_length=32, allow_blank=True)
     stop_over = serializers.CharField(max_length=64, allow_null=True, required=False)
+    technical_stop = serializers.CharField(max_length=16, allow_null=True, required=False, allow_blank=True)
     return_flight = serializers.BooleanField(required=False)
 
 
@@ -309,6 +310,13 @@ class InventorySegmentSerializer(serializers.Serializer):
     arrival_datetime = serializers.DateTimeField()
     duration = serializers.CharField(max_length=32, required=False, allow_blank=True)
     stop_over = serializers.CharField(max_length=64, required=False, allow_blank=True, allow_null=True)
+    technical_stop = serializers.CharField(
+        max_length=16,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Optional mid-flight technical stop airport IATA code.",
+    )
     return_flight = serializers.BooleanField(required=False, default=False)
 
     def validate_origin(self, value):

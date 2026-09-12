@@ -260,6 +260,11 @@ class AgentFlightInventoryViewSet(viewsets.ModelViewSet):
                     "baggage_check_in": inv.baggage_check_in,
                     "baggage_hand": inv.baggage_hand,
                     "duration": inv.duration,
+                    "sales_closing_datetime": (
+                        inv.sales_closing_datetime.isoformat()
+                        if inv.sales_closing_datetime
+                        else None
+                    ),
                 }
             )
 
