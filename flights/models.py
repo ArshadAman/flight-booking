@@ -54,6 +54,12 @@ class AgentFlightInventory(BaseModel):
         blank=True,
         help_text="Optional cutoff datetime — sales stop at this time even if seats are available.",
     )
+    group_pnr = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Optional Group PNR (GPNR) for this inventory listing.",
+    )
     apis_required = models.BooleanField(
         default=False,
         help_text="Whether passport/API passenger details are required for booking.",

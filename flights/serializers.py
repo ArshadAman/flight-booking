@@ -361,6 +361,7 @@ class FlightInventoryCreateSerializer(serializers.ModelSerializer):
             "policies",
             "segments",
             "sales_closing_datetime",
+            "group_pnr",
             "created_at",
             "updated_at",
         ]
@@ -442,6 +443,7 @@ class FlightInventoryResponseSerializer(serializers.ModelSerializer):
             "policies",
             "segments_data",
             "sales_closing_datetime",
+            "group_pnr",
             "agent",
             "agent_username",
             "created_at",
@@ -493,6 +495,7 @@ class PublicForSaleInventorySerializer(serializers.ModelSerializer):
             "policies",
             "segments_data",
             "sales_closing_datetime",
+            "group_pnr",
             "flight_key",
             "fare_id",
             "search_key",
