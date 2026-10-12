@@ -102,6 +102,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
+        # UI accepts "username or email" — resolve email to username before JWT auth.
+        login_id = (attrs.get(self.username_field) or "").strip()
+        if login_id and "@" in login_id:
+            matched = User.objects.filter(email__iexact=login_id).first()
+            if matched:
+                attrs[self.username_field] = matched.username
         data = super().validate(attrs)
         wallet_balance = None
         wallet_currency = None
