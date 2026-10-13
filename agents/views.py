@@ -104,24 +104,37 @@ class AgentDashboardAPIView(APIView):
         today_start, today_end = day_bounds(today)
         y_start, y_end = day_bounds(yesterday)
 
-        confirmed = agent_tickets.filter(status=Ticket.STATUS_CONFIRMED)
+        range_key = (request.query_params.get("range") or "24h").lower()
+        if range_key == "7d":
+            window = timedelta(days=7)
+        elif range_key == "30d":
+            window = timedelta(days=30)
+        else:
+            range_key = "24h"
+            window = timedelta(hours=24)
+        window_start = now - window
+        prev_start = window_start - window
+
+        scoped_tickets = agent_tickets.filter(created_at__gte=window_start)
+        prev_tickets = agent_tickets.filter(created_at__gte=prev_start, created_at__lt=window_start)
+
+        confirmed = scoped_tickets.filter(status=Ticket.STATUS_CONFIRMED)
         revenue = _money(confirmed.aggregate(s=Sum("total_amount"))["s"])
-        y_confirmed = agent_tickets.filter(
-            status=Ticket.STATUS_CONFIRMED, created_at__gte=y_start, created_at__lt=y_end
+        y_revenue = _money(
+            prev_tickets.filter(status=Ticket.STATUS_CONFIRMED).aggregate(s=Sum("total_amount"))["s"]
         )
-        y_revenue = _money(y_confirmed.aggregate(s=Sum("total_amount"))["s"])
         today_confirmed = agent_tickets.filter(
             status=Ticket.STATUS_CONFIRMED, created_at__gte=today_start, created_at__lt=today_end
         )
         today_revenue = _money(today_confirmed.aggregate(s=Sum("total_amount"))["s"])
 
-        total_bookings = agent_tickets.count()
-        y_bookings = agent_tickets.filter(created_at__gte=y_start, created_at__lt=y_end).count()
+        total_bookings = scoped_tickets.count()
+        y_bookings = prev_tickets.count()
         today_bookings = agent_tickets.filter(created_at__gte=today_start, created_at__lt=today_end).count()
 
-        pending = agent_tickets.filter(status=Ticket.STATUS_PENDING).count()
-        failed = agent_tickets.filter(status=Ticket.STATUS_FAILED).count()
-        cancelled = agent_tickets.filter(status=Ticket.STATUS_CANCELLED).count()
+        pending = scoped_tickets.filter(status=Ticket.STATUS_PENDING).count()
+        failed = scoped_tickets.filter(status=Ticket.STATUS_FAILED).count()
+        cancelled = scoped_tickets.filter(status=Ticket.STATUS_CANCELLED).count()
         ticketed = confirmed.exclude(Q(ticket_number__isnull=True) | Q(ticket_number="")).count()
         if ticketed == 0:
             ticketed = confirmed.count()
@@ -130,7 +143,7 @@ class AgentDashboardAPIView(APIView):
             inventory__agent=user, status=InventoryHold.STATUS_HOLD
         ).count()
         waitlist = sum(int(x.waitlist_count or 0) for x in inventory_qs)
-        refund_requests = agent_tickets.filter(status=Ticket.STATUS_CANCELLED).count()
+        refund_requests = scoped_tickets.filter(status=Ticket.STATUS_CANCELLED).count()
 
         departures_today = inventory_qs.filter(
             departure_datetime__gte=today_start, departure_datetime__lt=today_end
@@ -162,7 +175,7 @@ class AgentDashboardAPIView(APIView):
             chart_revenue.append(round(r / 1000, 2))  # in thousands for chart scale
             chart_booking.append(b)
             chart_tickets.append(t)
-            chart_profit.append(round((r * 0.12) / 1000, 2))
+            chart_profit.append(0)
 
         # Recent activities
         activities = []
@@ -225,7 +238,7 @@ class AgentDashboardAPIView(APIView):
                 "revenue": _inr_display(_money(r["revenue"])),
                 "revenue_raw": _money(r["revenue"]),
                 "pct": int(round((_money(r["revenue"]) / max_route) * 100)),
-                "growth": f"+{_pct_change(_money(r['revenue']), max_route * 0.8)}%",
+                "growth": f"{int(round((_money(r['revenue']) / max(revenue, 1)) * 100))}%",
             }
             for r in route_rows
         ]
@@ -254,7 +267,7 @@ class AgentDashboardAPIView(APIView):
                     "name": name,
                     "tag": "B2B and B2C",
                     "revenue": _inr_display(_money(r["revenue"])),
-                    "growth": "+18.6%",
+                    "growth": f"{int(round((_money(r['revenue']) / max(revenue, 1)) * 100))}%",
                 }
             )
 
@@ -305,7 +318,36 @@ class AgentDashboardAPIView(APIView):
             },
         ]
 
-        profit = revenue * 0.12
+        profit = 0.0
+        for ticket in confirmed.select_related("agent_flight_inventory")[:400]:
+            pax = ticket.passengers_data if isinstance(ticket.passengers_data, list) else []
+            seats = len(pax) or 1
+            if ticket.agent_flight_inventory_id and ticket.agent_flight_inventory:
+                cost = _money(ticket.agent_flight_inventory.price) * seats
+            else:
+                cost = _money(ticket.basic_amount)
+            profit += _money(ticket.total_amount) - cost
+
+        from django.contrib.auth import get_user_model
+
+        UserModel = get_user_model()
+        if is_platform_admin(user):
+            total_agents = UserModel.objects.filter(role=UserModel.AGENT, is_active=True).count()
+        else:
+            total_agents = 1
+
+        schedule = []
+        for flight in inventory_qs.filter(departure_datetime__gte=today_start).order_by("departure_datetime")[:12]:
+            local_dep = timezone.localtime(flight.departure_datetime)
+            schedule.append(
+                {
+                    "date": local_dep.date().isoformat(),
+                    "time": local_dep.strftime("%I:%M %p").lstrip("0"),
+                    "title": f"{flight.origin} → {flight.destination}",
+                    "desc": f"{flight.airline_name or flight.airline_code} {flight.flight_number}".strip(),
+                    "done": flight.departure_datetime < now,
+                }
+            )
         display_name = (
             " ".join(x for x in [user.first_name or "", user.last_name or ""] if x).strip()
             or user.username
@@ -318,17 +360,20 @@ class AgentDashboardAPIView(APIView):
                 "greeting": f"{greeting}, {display_name}",
                 "subtitle": "Here's what happening with your bookings today.",
                 "now": timezone.localtime(now).isoformat(),
+                "range": range_key,
+                "workspace": display_name,
                 "kpi": {
                     "total_revenue": revenue,
                     "total_revenue_display": _inr_display(revenue),
                     "total_booking": total_bookings,
+                    "total_agents": total_agents,
                     "wallet_balance": wallet_balance,
                     "wallet_balance_display": _inr_display(wallet_balance),
                     "wallet_currency": wallet_currency,
                     "departures": departures_today,
                     "inventory_listings": inventory_qs.count(),
-                    "revenue_trend_pct": _pct_change(today_revenue, y_revenue),
-                    "booking_trend_pct": _pct_change(today_bookings, y_bookings),
+                    "revenue_trend_pct": _pct_change(revenue, y_revenue),
+                    "booking_trend_pct": _pct_change(total_bookings, y_bookings),
                 },
                 "today": {
                     "total_booking": today_bookings,
@@ -376,11 +421,12 @@ class AgentDashboardAPIView(APIView):
                 "top_customers": top_customers,
                 "top_airlines": top_airlines,
                 "top_routes": top_routes,
+                "schedule": schedule,
                 "quick_actions": [
                     {"label": "New Booking", "href": "/sale/flight/all"},
                     {"label": "Import PNR", "href": "/sale/inventory/new?mode=pnr"},
                     {"label": "Add Payment", "href": "/sale/profile?tab=update-profile"},
-                    {"label": "Publish Inventory", "href": "/sale/inventory"},
+                    {"label": "Create Agent", "href": "/sale/profile?tab=manage-user&action=create-sub-user"},
                 ],
             }
         )
