@@ -59,6 +59,8 @@ class GroupBooking(BaseModel):
     total_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     payment_deadline = models.DateTimeField(null=True, blank=True)
     balance_deadline = models.DateTimeField(null=True, blank=True)
+    payment_proof_name = models.CharField(max_length=255, blank=True, default="")
+    payment_proof_data = models.TextField(blank=True, default="")
 
     def save(self, *args, **kwargs):
         if not self.request_id:
@@ -140,3 +142,44 @@ class GroupChangeRequest(BaseModel):
 
     def __str__(self):
         return f"{self.change_type} Request {self.change_request_id} ({self.status}) for {self.booking.request_id}"
+
+
+class GroupServiceCase(BaseModel):
+    """Rebooking or refund request raised from the B2B booking menu."""
+
+    KIND_REBOOK = "REBOOK"
+    KIND_REFUND = "REFUND"
+    KIND_CHOICES = [
+        (KIND_REBOOK, "Rebooking"),
+        (KIND_REFUND, "Refund"),
+    ]
+    STATUS_OPEN = "OPEN"
+    STATUS_SUBMITTED = "SUBMITTED"
+    STATUS_DONE = "DONE"
+    STATUS_CHOICES = [
+        (STATUS_OPEN, "Open"),
+        (STATUS_SUBMITTED, "Submitted"),
+        (STATUS_DONE, "Done"),
+    ]
+
+    booking = models.ForeignKey(GroupBooking, on_delete=models.CASCADE, related_name="service_cases")
+    case_id = models.CharField(max_length=50, unique=True, blank=True)
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES)
+    step = models.PositiveSmallIntegerField(default=1)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_OPEN)
+    payload = models.JSONField(default=dict, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.case_id:
+            while True:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                rand_part = "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=4))
+                prefix = "RB" if self.kind == self.KIND_REBOOK else "RF"
+                cid = f"{prefix}{timestamp}{rand_part}"
+                if not GroupServiceCase.objects.filter(case_id=cid).exists():
+                    self.case_id = cid
+                    break
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.kind} {self.case_id} step {self.step}"

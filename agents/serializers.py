@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import InventoryRestriction, AgentAuditLog, Supplier
+from .models import InventoryRestriction, AgentAuditLog, Supplier, Notice, AgentCommission
 
 
 class InventoryRestrictionSerializer(serializers.ModelSerializer):
@@ -84,3 +84,17 @@ class AgentAuditLogSerializer(serializers.ModelSerializer):
             return "AGT"
         base = "".join(ch for ch in f"{user.first_name}{user.last_name}{user.username}" if ch.isalpha())
         return (base.upper()[:3] or "AGT")
+
+
+class NoticeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notice
+        fields = ("id", "category", "label", "title", "body", "is_active", "created_at")
+        read_only_fields = ("id", "created_at")
+
+
+class AgentCommissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AgentCommission
+        fields = ("id", "category", "method", "markup", "updated_at")
+        read_only_fields = ("id", "updated_at")

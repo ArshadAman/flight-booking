@@ -6,12 +6,13 @@ from decimal import Decimal
 import datetime
 
 
-from bookings.models import GroupBooking, GroupQuote, GroupPassenger, GroupChangeRequest
+from bookings.models import GroupBooking, GroupQuote, GroupPassenger, GroupChangeRequest, GroupServiceCase
 from bookings.serializers import (
     GroupBookingSerializer,
     GroupQuoteSerializer,
     GroupPassengerSerializer,
-    GroupChangeRequestSerializer
+    GroupChangeRequestSerializer,
+    GroupServiceCaseSerializer,
 )
 
 class GroupBookingViewSet(viewsets.ModelViewSet):
@@ -177,20 +178,54 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
         total_pax = booking.pax_adults + booking.pax_children + booking.pax_infants
         total_cost = (selected_quote.fare_per_pax + selected_quote.tax_per_pax) * total_pax
         
+        proof_name = (request.data.get("proof_name") or "").strip()
+        proof_data = request.data.get("proof_data") or ""
+        if isinstance(proof_data, str) and len(proof_data) > 2_000_000:
+            return Response({"detail": "Payment screenshot is too large."}, status=status.HTTP_400_BAD_REQUEST)
+
         with transaction.atomic():
             booking.total_paid += amount
             if booking.total_paid >= total_cost:
                 booking.status = 'PAID'
             else:
                 booking.status = 'PARTIALLY_PAID'
+            if proof_name:
+                booking.payment_proof_name = proof_name[:255]
+            if proof_data:
+                booking.payment_proof_data = proof_data
             booking.save()
             
         return Response({
             "message": f"Payment of {amount} recorded successfully.",
             "total_paid": booking.total_paid,
             "total_cost": total_cost,
-            "status": booking.status
+            "status": booking.status,
+            "has_payment_proof": bool(booking.payment_proof_data),
         })
+
+    @action(detail=True, methods=["post"], url_path="service-case")
+    def create_service_case(self, request, pk=None):
+        booking = self.get_object()
+        kind = (request.data.get("kind") or "").upper()
+        if kind not in {GroupServiceCase.KIND_REBOOK, GroupServiceCase.KIND_REFUND}:
+            return Response({"detail": "kind must be REBOOK or REFUND."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            step = int(request.data.get("step") or 1)
+        except (TypeError, ValueError):
+            step = 1
+        step = max(1, min(step, 6))
+        payload = request.data.get("payload") or {}
+        if not isinstance(payload, dict):
+            return Response({"detail": "payload must be an object."}, status=status.HTTP_400_BAD_REQUEST)
+        case_status = GroupServiceCase.STATUS_SUBMITTED if step >= 6 else GroupServiceCase.STATUS_OPEN
+        case = GroupServiceCase.objects.create(
+            booking=booking,
+            kind=kind,
+            step=step,
+            status=case_status,
+            payload=payload,
+        )
+        return Response(GroupServiceCaseSerializer(case).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='passengers')
     def upload_passengers(self, request, pk=None):

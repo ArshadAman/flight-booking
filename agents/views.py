@@ -8,8 +8,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminUser, IsAgentUser, is_platform_admin
-from .models import InventoryRestriction, AgentAuditLog, Supplier
-from .serializers import InventoryRestrictionSerializer, AgentAuditLogSerializer, SupplierSerializer
+from .models import InventoryRestriction, AgentAuditLog, Supplier, Notice, AgentCommission
+from .serializers import (
+    InventoryRestrictionSerializer,
+    AgentAuditLogSerializer,
+    SupplierSerializer,
+    NoticeSerializer,
+    AgentCommissionSerializer,
+)
 
 
 def _money(value) -> float:
@@ -67,6 +73,57 @@ class SupplierViewSet(viewsets.ModelViewSet):
         supplier.status = Supplier.STATUS_DENIED
         supplier.save(update_fields=["status", "updated_at"])
         return Response(SupplierSerializer(supplier).data)
+
+
+class NoticeViewSet(viewsets.ModelViewSet):
+    """Agents read active notices. Admins can create and edit them."""
+
+    serializer_class = NoticeSerializer
+    queryset = Notice.objects.all()
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), IsAdminUser()]
+
+    def get_queryset(self):
+        qs = Notice.objects.all()
+        if not is_platform_admin(self.request.user):
+            qs = qs.filter(is_active=True)
+        category = (self.request.query_params.get("category") or "").strip().lower()
+        if category:
+            qs = qs.filter(category=category)
+        return qs
+
+
+class AgentCommissionAPIView(APIView):
+    """GET/POST the logged-in agent's markup for flight or rebooking."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        rows = AgentCommission.objects.filter(agent=request.user)
+        return Response(AgentCommissionSerializer(rows, many=True).data)
+
+    def post(self, request):
+        category = (request.data.get("category") or "flight").strip().lower()
+        method = (request.data.get("method") or "none").strip().lower()
+        if category not in {AgentCommission.CATEGORY_FLIGHT, AgentCommission.CATEGORY_REBOOK}:
+            return Response({"detail": "category must be flight or rebook."}, status=400)
+        allowed = {choice[0] for choice in AgentCommission.METHOD_CHOICES}
+        if method not in allowed:
+            return Response({"detail": "Unknown commission method."}, status=400)
+        try:
+            markup = request.data.get("markup") or 0
+            markup = str(markup).replace("INR", "").replace(",", "").strip() or "0"
+        except Exception:
+            markup = "0"
+        row, _ = AgentCommission.objects.update_or_create(
+            agent=request.user,
+            category=category,
+            defaults={"method": method, "markup": markup},
+        )
+        return Response(AgentCommissionSerializer(row).data)
 
 
 class InventoryRestrictionViewSet(viewsets.ModelViewSet):

@@ -154,3 +154,68 @@ def log_agent_action(
         reference=(reference or "")[:64],
         metadata=metadata or {},
     )
+
+
+class Notice(BaseModel):
+    """Board item shown to agents under My Account → Notice Board."""
+
+    CATEGORY_AIRLINE = "airline"
+    CATEGORY_FINANCE = "finance"
+    CATEGORY_CONTACT = "contact"
+    CATEGORY_OTHER = "other"
+    CATEGORY_CHOICES = [
+        (CATEGORY_AIRLINE, "Airline"),
+        (CATEGORY_FINANCE, "Finance"),
+        (CATEGORY_CONTACT, "Contact"),
+        (CATEGORY_OTHER, "Other"),
+    ]
+
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default=CATEGORY_OTHER)
+    label = models.CharField(max_length=40, blank=True, default="")
+    title = models.CharField(max_length=160)
+    body = models.TextField()
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["category", "-created_at"]
+
+    def __str__(self):
+        return self.title
+
+
+class AgentCommission(BaseModel):
+    """Markup rule an agent saves from Manage Commission."""
+
+    CATEGORY_FLIGHT = "flight"
+    CATEGORY_REBOOK = "rebook"
+    CATEGORY_CHOICES = [
+        (CATEGORY_FLIGHT, "Flight"),
+        (CATEGORY_REBOOK, "Rebooking"),
+    ]
+    METHOD_NONE = "none"
+    METHOD_FLAT = "flat"
+    METHOD_STANDARD = "standard"
+    METHOD_SIMPLE = "simple"
+    METHOD_CUSTOM = "custom"
+    METHOD_CHOICES = [
+        (METHOD_NONE, "No Calculation"),
+        (METHOD_FLAT, "Flat Calculation"),
+        (METHOD_STANDARD, "Standard Calculation"),
+        (METHOD_SIMPLE, "Simple Calculation"),
+        (METHOD_CUSTOM, "Custom Calculation"),
+    ]
+
+    agent = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="commissions",
+    )
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default=CATEGORY_FLIGHT)
+    method = models.CharField(max_length=20, choices=METHOD_CHOICES, default=METHOD_NONE)
+    markup = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    class Meta:
+        unique_together = [("agent", "category")]
+
+    def __str__(self):
+        return f"{self.agent_id} {self.category} {self.method}"
