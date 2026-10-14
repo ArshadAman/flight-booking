@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import InventoryRestriction, AgentAuditLog
+from .models import InventoryRestriction, AgentAuditLog, Supplier
+
+
+@admin.register(Supplier)
+class SupplierAdmin(admin.ModelAdmin):
+    list_display = ("code", "name", "contact_name", "email", "status", "inventory_count", "created_at")
+    list_filter = ("status",)
+    search_fields = ("code", "name", "email", "contact_name")
 
 
 @admin.register(InventoryRestriction)

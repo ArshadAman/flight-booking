@@ -3,12 +3,13 @@ from datetime import datetime, time, timedelta
 from django.db.models import Count, Sum, Q
 from django.utils import timezone
 from rest_framework import viewsets, permissions, generics
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminUser, IsAgentUser, is_platform_admin
-from .models import InventoryRestriction, AgentAuditLog
-from .serializers import InventoryRestrictionSerializer, AgentAuditLogSerializer
+from .models import InventoryRestriction, AgentAuditLog, Supplier
+from .serializers import InventoryRestrictionSerializer, AgentAuditLogSerializer, SupplierSerializer
 
 
 def _money(value) -> float:
@@ -34,6 +35,38 @@ def _inr_display(value: float) -> str:
     n = int(round(_money(value)))
     s = f"{n:,}"
     return f"₹{s}"
+
+
+class SupplierViewSet(viewsets.ModelViewSet):
+    """Admin CRUD for inventory suppliers and onboarding requests."""
+
+    serializer_class = SupplierSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+    queryset = Supplier.objects.all()
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        status = (self.request.query_params.get("status") or "").strip().lower()
+        if status in {Supplier.STATUS_PENDING, Supplier.STATUS_APPROVED, Supplier.STATUS_DENIED}:
+            qs = qs.filter(status=status)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(requested_by=self.request.user)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        supplier = self.get_object()
+        supplier.status = Supplier.STATUS_APPROVED
+        supplier.save(update_fields=["status", "updated_at"])
+        return Response(SupplierSerializer(supplier).data)
+
+    @action(detail=True, methods=["post"])
+    def deny(self, request, pk=None):
+        supplier = self.get_object()
+        supplier.status = Supplier.STATUS_DENIED
+        supplier.save(update_fields=["status", "updated_at"])
+        return Response(SupplierSerializer(supplier).data)
 
 
 class InventoryRestrictionViewSet(viewsets.ModelViewSet):

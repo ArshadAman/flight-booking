@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import InventoryRestriction, AgentAuditLog
+from .models import InventoryRestriction, AgentAuditLog, Supplier
 
 
 class InventoryRestrictionSerializer(serializers.ModelSerializer):
@@ -41,6 +41,25 @@ class InventoryRestrictionSerializer(serializers.ModelSerializer):
         if scope == InventoryRestriction.SCOPE_ROUTE and (not origin or not dest):
             raise serializers.ValidationError({"origin": "Origin and destination are required for route blocks."})
         return attrs
+
+
+class SupplierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Supplier
+        fields = (
+            "id",
+            "code",
+            "name",
+            "contact_name",
+            "email",
+            "phone",
+            "status",
+            "inventory_count",
+            "notes",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "code", "created_at", "updated_at")
 
 
 class AgentAuditLogSerializer(serializers.ModelSerializer):

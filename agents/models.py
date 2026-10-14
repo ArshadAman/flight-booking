@@ -3,6 +3,50 @@ from django.db import models
 from core.models import BaseModel
 
 
+class Supplier(BaseModel):
+    """Airline or inventory supplier onboarded by admin. Requests start pending."""
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_DENIED = "denied"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_DENIED, "Denied"),
+    ]
+
+    code = models.CharField(max_length=20, unique=True, blank=True, default="")
+    name = models.CharField(max_length=160)
+    contact_name = models.CharField(max_length=120, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    inventory_count = models.PositiveIntegerField(default=0)
+    notes = models.CharField(max_length=255, blank=True, default="")
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="supplier_requests",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Supplier"
+        verbose_name_plural = "Suppliers"
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            prefix = "SUP-"
+            existing = Supplier.objects.filter(code__startswith=prefix).count() + 1
+            self.code = f"{prefix}{existing:03d}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.code} {self.name}"
+
+
 class InventoryRestriction(BaseModel):
     """
     Platform controls to block airline codes or routes from offline inventory channels.

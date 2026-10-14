@@ -1,8 +1,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import InventoryRestrictionViewSet, AgentHistoryListView, AgentDashboardAPIView
+from .views import (
+    InventoryRestrictionViewSet,
+    AgentHistoryListView,
+    AgentDashboardAPIView,
+    SupplierViewSet,
+)
 
 router = DefaultRouter()
+router.register(r"suppliers", SupplierViewSet, basename="suppliers")
 router.register(r"restrictions", InventoryRestrictionViewSet, basename="inventory-restrictions")
 
 urlpatterns = [
