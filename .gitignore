@@ -1,6 +1,6 @@
 __pycache__
 venv
-.env
+#.env
 DS_Store
 travel_deal/
 frontend/
