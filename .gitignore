@@ -4,3 +4,4 @@ venv
 DS_Store
 travel_deal/
 frontend/
+**/.DS_Store

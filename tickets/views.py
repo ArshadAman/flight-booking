@@ -1,9 +1,16 @@
 import logging
+from django.db import models
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import Ticket
-from .serializers import TicketSerializer, TicketPurchaseRequestSerializer, TicketCancelRequestSerializer
+from .models import Ticket, TicketCancellation, TicketAmendment
+from .serializers import (
+    TicketSerializer,
+    TicketPurchaseRequestSerializer,
+    TicketCancelRequestSerializer,
+    TicketCancellationSerializer,
+    TicketAmendmentSerializer,
+)
 from flights.services import ProviderService, ProviderAPIException
 from accounts.permissions import is_platform_admin
 
@@ -803,3 +810,43 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             request.user.username, pnr_number, inventory_id,
         )
         return Response(self.get_serializer(ticket).data, status=status.HTTP_201_CREATED)
+
+
+class TicketCancellationViewSet(viewsets.ModelViewSet):
+    """
+    CRUD for ticket cancellations and refund claims.
+    """
+    from .models import TicketCancellation
+    from .serializers import TicketCancellationSerializer
+
+    queryset = TicketCancellation.objects.all()
+    serializer_class = TicketCancellationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if is_platform_admin(user):
+            return self.queryset.all()
+        return self.queryset.filter(
+            models.Q(ticket__user=user) | models.Q(ticket__agent_flight_inventory__agent=user)
+        )
+
+
+class TicketAmendmentViewSet(viewsets.ModelViewSet):
+    """
+    CRUD for ticket amendments (date, route, name changes).
+    """
+    from .models import TicketAmendment
+    from .serializers import TicketAmendmentSerializer
+
+    queryset = TicketAmendment.objects.all()
+    serializer_class = TicketAmendmentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if is_platform_admin(user):
+            return self.queryset.all()
+        return self.queryset.filter(
+            models.Q(ticket__user=user) | models.Q(ticket__agent_flight_inventory__agent=user)
+        )

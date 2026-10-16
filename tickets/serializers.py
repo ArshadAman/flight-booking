@@ -268,3 +268,50 @@ class TicketCancelRequestSerializer(serializers.Serializer):
         default="005",
         help_text="FlyShop GDS cancel code classification."
     )
+
+
+class TicketCancellationSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models import TicketCancellation
+        model = TicketCancellation
+        fields = (
+            "id",
+            "claim_id",
+            "ticket",
+            "pnr",
+            "passenger_name",
+            "sector",
+            "travel_date",
+            "fare_paid",
+            "airline_penalty",
+            "agent_service_fee",
+            "refund_amount",
+            "status",
+            "reason",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "claim_id", "created_at", "updated_at")
+
+
+class TicketAmendmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models import TicketAmendment
+        model = TicketAmendment
+        fields = (
+            "id",
+            "amendment_id",
+            "ticket",
+            "pnr",
+            "passenger_name",
+            "amendment_type",
+            "old_value",
+            "new_value",
+            "fare_difference",
+            "service_fee",
+            "total_payable",
+            "status",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "amendment_id", "created_at", "updated_at")

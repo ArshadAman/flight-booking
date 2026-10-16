@@ -8,13 +8,31 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminUser, IsAgentUser, is_platform_admin
-from .models import InventoryRestriction, AgentAuditLog, Supplier, Notice, AgentCommission
+from .models import (
+    InventoryRestriction,
+    AgentAuditLog,
+    Supplier,
+    Notice,
+    AgentCommission,
+    Discount,
+    MarkupRule,
+    ServiceCharge,
+    StaffMember,
+    CompanyProfile,
+    InvoiceSetting,
+)
 from .serializers import (
     InventoryRestrictionSerializer,
     AgentAuditLogSerializer,
     SupplierSerializer,
     NoticeSerializer,
     AgentCommissionSerializer,
+    DiscountSerializer,
+    MarkupRuleSerializer,
+    ServiceChargeSerializer,
+    StaffMemberSerializer,
+    CompanyProfileSerializer,
+    InvoiceSettingSerializer,
 )
 
 
@@ -520,3 +538,111 @@ class AgentDashboardAPIView(APIView):
                 ],
             }
         )
+
+
+class DiscountViewSet(viewsets.ModelViewSet):
+    """CRUD for agent promo codes and discount rules."""
+
+    serializer_class = DiscountSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if is_platform_admin(user):
+            return Discount.objects.all()
+        return Discount.objects.filter(Q(agent=user) | Q(agent__isnull=True))
+
+    def perform_create(self, serializer):
+        serializer.save(agent=self.request.user)
+
+
+class MarkupRuleViewSet(viewsets.ModelViewSet):
+    """CRUD for sector and channel markup matrix."""
+
+    serializer_class = MarkupRuleSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if is_platform_admin(user):
+            return MarkupRule.objects.all()
+        return MarkupRule.objects.filter(Q(agent=user) | Q(agent__isnull=True))
+
+    def perform_create(self, serializer):
+        serializer.save(agent=self.request.user)
+
+
+class ServiceChargeViewSet(viewsets.ModelViewSet):
+    """CRUD for platform convenience fees and GST rules."""
+
+    serializer_class = ServiceChargeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if is_platform_admin(user):
+            return ServiceCharge.objects.all()
+        return ServiceCharge.objects.filter(Q(agent=user) | Q(agent__isnull=True))
+
+    def perform_create(self, serializer):
+        serializer.save(agent=self.request.user)
+
+
+class StaffMemberViewSet(viewsets.ModelViewSet):
+    """CRUD for sub-agents and staff members."""
+
+    serializer_class = StaffMemberSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if is_platform_admin(user):
+            return StaffMember.objects.all()
+        return StaffMember.objects.filter(agent=user)
+
+    def perform_create(self, serializer):
+        serializer.save(agent=self.request.user)
+
+
+class CompanyProfileView(APIView):
+    """GET and PUT agency corporate and tax profile."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        profile, _ = CompanyProfile.objects.get_or_create(
+            agent=user,
+            defaults={
+                "company_name": f"{user.first_name} {user.last_name} Agency".strip() or user.username,
+                "email": user.email,
+            },
+        )
+        return Response(CompanyProfileSerializer(profile).data)
+
+    def put(self, request):
+        user = request.user
+        profile, _ = CompanyProfile.objects.get_or_create(agent=user)
+        serializer = CompanyProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class InvoiceSettingView(APIView):
+    """GET and PUT agency invoice prefix and sequences."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        setting, _ = InvoiceSetting.objects.get_or_create(agent=user)
+        return Response(InvoiceSettingSerializer(setting).data)
+
+    def put(self, request):
+        user = request.user
+        setting, _ = InvoiceSetting.objects.get_or_create(agent=user)
+        serializer = InvoiceSettingSerializer(setting, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)

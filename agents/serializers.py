@@ -1,5 +1,17 @@
 from rest_framework import serializers
-from .models import InventoryRestriction, AgentAuditLog, Supplier, Notice, AgentCommission
+from .models import (
+    InventoryRestriction,
+    AgentAuditLog,
+    Supplier,
+    Notice,
+    AgentCommission,
+    Discount,
+    MarkupRule,
+    ServiceCharge,
+    StaffMember,
+    CompanyProfile,
+    InvoiceSetting,
+)
 
 
 class InventoryRestrictionSerializer(serializers.ModelSerializer):
@@ -97,4 +109,111 @@ class AgentCommissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = AgentCommission
         fields = ("id", "category", "method", "markup", "updated_at")
+        read_only_fields = ("id", "updated_at")
+
+
+class DiscountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Discount
+        fields = (
+            "id",
+            "code",
+            "title",
+            "discount_type",
+            "value",
+            "min_booking",
+            "max_discount",
+            "valid_until",
+            "usage_count",
+            "usage_limit",
+            "is_active",
+            "created_at",
+        )
+        read_only_fields = ("id", "usage_count", "created_at")
+
+
+class MarkupRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MarkupRule
+        fields = (
+            "id",
+            "channel",
+            "airline",
+            "sector",
+            "markup_type",
+            "value",
+            "is_active",
+            "created_at",
+        )
+        read_only_fields = ("id", "created_at")
+
+
+class ServiceChargeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceCharge
+        fields = (
+            "id",
+            "code",
+            "name",
+            "charge_type",
+            "amount",
+            "gst_rate",
+            "apply_on",
+            "is_active",
+            "created_at",
+        )
+        read_only_fields = ("id", "created_at")
+
+
+class StaffMemberSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StaffMember
+        fields = (
+            "id",
+            "name",
+            "email",
+            "phone",
+            "role",
+            "status",
+            "bookings_count",
+            "total_sales",
+            "created_at",
+        )
+        read_only_fields = ("id", "created_at")
+
+
+class CompanyProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CompanyProfile
+        fields = (
+            "id",
+            "company_name",
+            "trade_name",
+            "iata_number",
+            "gstin",
+            "pan",
+            "email",
+            "phone",
+            "address",
+            "city",
+            "state",
+            "pincode",
+            "updated_at",
+        )
+        read_only_fields = ("id", "updated_at")
+
+
+class InvoiceSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InvoiceSetting
+        fields = (
+            "id",
+            "series_prefix",
+            "starting_seq",
+            "current_seq",
+            "show_tax_breakdown",
+            "show_airline_pnr",
+            "footer_note",
+            "updated_at",
+        )
         read_only_fields = ("id", "updated_at")

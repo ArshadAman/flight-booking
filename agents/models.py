@@ -219,3 +219,158 @@ class AgentCommission(BaseModel):
 
     def __str__(self):
         return f"{self.agent_id} {self.category} {self.method}"
+
+
+class Discount(BaseModel):
+    """Promo codes and discounts managed by an agent."""
+
+    TYPE_PERCENTAGE = "PERCENTAGE"
+    TYPE_FIXED = "FIXED"
+    TYPE_CHOICES = [(TYPE_PERCENTAGE, "Percentage"), (TYPE_FIXED, "Fixed Amount")]
+
+    agent = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="discounts",
+        null=True,
+        blank=True,
+    )
+    code = models.CharField(max_length=40)
+    title = models.CharField(max_length=120)
+    discount_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_PERCENTAGE)
+    value = models.DecimalField(max_digits=10, decimal_places=2)
+    min_booking = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    max_discount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    valid_until = models.DateField(null=True, blank=True)
+    usage_count = models.PositiveIntegerField(default=0)
+    usage_limit = models.PositiveIntegerField(default=100)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.code} ({self.discount_type}: {self.value})"
+
+
+class MarkupRule(BaseModel):
+    """Dynamic markups per sector, airline, and channel."""
+
+    TYPE_PERCENTAGE = "PERCENTAGE"
+    TYPE_FIXED = "FIXED"
+    TYPE_CHOICES = [(TYPE_PERCENTAGE, "Percentage"), (TYPE_FIXED, "Fixed")]
+
+    agent = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="markup_rules",
+        null=True,
+        blank=True,
+    )
+    channel = models.CharField(max_length=20, default="B2B")
+    airline = models.CharField(max_length=50, default="ALL")
+    sector = models.CharField(max_length=20, default="ALL")
+    markup_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_PERCENTAGE)
+    value = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.channel} {self.airline} {self.sector}: {self.value}"
+
+
+class ServiceCharge(BaseModel):
+    """Convenience and platform service charges."""
+
+    TYPE_FIXED = "FIXED"
+    TYPE_PERCENTAGE = "PERCENTAGE"
+    TYPE_CHOICES = [(TYPE_FIXED, "Fixed"), (TYPE_PERCENTAGE, "Percentage")]
+
+    agent = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="service_charges",
+        null=True,
+        blank=True,
+    )
+    code = models.CharField(max_length=30)
+    name = models.CharField(max_length=100)
+    charge_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_FIXED)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=18.00)
+    apply_on = models.CharField(max_length=50, default="Per Passenger")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.code} {self.name}: {self.amount}"
+
+
+class StaffMember(BaseModel):
+    """Sub-agents and staff members managed under agency."""
+
+    agent = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="staff_members",
+    )
+    name = models.CharField(max_length=120)
+    email = models.EmailField()
+    phone = models.CharField(max_length=20, blank=True, default="")
+    role = models.CharField(max_length=50, default="Ticketing Agent")
+    status = models.CharField(max_length=20, default="Active")
+    bookings_count = models.PositiveIntegerField(default=0)
+    total_sales = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.role})"
+
+
+class CompanyProfile(BaseModel):
+    """Agency corporate profile and tax information."""
+
+    agent = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="company_profile",
+    )
+    company_name = models.CharField(max_length=160, blank=True, default="")
+    trade_name = models.CharField(max_length=160, blank=True, default="")
+    iata_number = models.CharField(max_length=50, blank=True, default="")
+    gstin = models.CharField(max_length=20, blank=True, default="")
+    pan = models.CharField(max_length=20, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    address = models.TextField(blank=True, default="")
+    city = models.CharField(max_length=100, blank=True, default="")
+    state = models.CharField(max_length=100, blank=True, default="")
+    pincode = models.CharField(max_length=10, blank=True, default="")
+
+    def __str__(self):
+        return f"{self.company_name or self.agent.username} Profile"
+
+
+class InvoiceSetting(BaseModel):
+    """Agency invoice prefix and sequence setting."""
+
+    agent = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="invoice_setting",
+    )
+    series_prefix = models.CharField(max_length=20, default="INV-")
+    starting_seq = models.PositiveIntegerField(default=1001)
+    current_seq = models.PositiveIntegerField(default=1001)
+    show_tax_breakdown = models.BooleanField(default=True)
+    show_airline_pnr = models.BooleanField(default=True)
+    footer_note = models.TextField(blank=True, default="Thank you for choosing My Travel Deal.")
+
+    def __str__(self):
+        return f"{self.agent.username} Invoice Config ({self.series_prefix})"

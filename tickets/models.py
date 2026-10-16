@@ -206,3 +206,90 @@ class Ticket(BaseModel):
 
     def __str__(self):
         return f"Ticket {self.ticket_number or 'PENDING'} ({self.origin} -> {self.destination}) for {self.user.username}"
+
+
+class TicketCancellation(BaseModel):
+    """Refund claims and airline cancellation penalties."""
+
+    STATUS_PENDING = "PENDING"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cancellations",
+    )
+    claim_id = models.CharField(max_length=40, unique=True, blank=True)
+    pnr = models.CharField(max_length=30)
+    passenger_name = models.CharField(max_length=120)
+    sector = models.CharField(max_length=50)
+    travel_date = models.DateField(null=True, blank=True)
+    fare_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    airline_penalty = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    agent_service_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    reason = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.claim_id:
+            import random
+            self.claim_id = f"CAN-{random.randint(100000, 999999)}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.claim_id} · {self.pnr} ({self.status})"
+
+
+class TicketAmendment(BaseModel):
+    """Date, route, or name change requests."""
+
+    STATUS_PENDING = "PENDING"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="amendments",
+    )
+    amendment_id = models.CharField(max_length=40, unique=True, blank=True)
+    pnr = models.CharField(max_length=30)
+    passenger_name = models.CharField(max_length=120)
+    amendment_type = models.CharField(max_length=50, default="Date Change")
+    old_value = models.CharField(max_length=255, blank=True, default="")
+    new_value = models.CharField(max_length=255, blank=True, default="")
+    fare_difference = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    service_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_payable = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.amendment_id:
+            import random
+            self.amendment_id = f"AMD-{random.randint(100000, 999999)}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.amendment_id} · {self.pnr} ({self.amendment_type})"

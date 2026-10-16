@@ -1,12 +1,12 @@
 from decimal import Decimal
 
-from rest_framework import permissions
+from rest_framework import permissions, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsAgentUser
-from .models import AgentWallet
-from .serializers import AgentWalletSerializer
+from accounts.permissions import IsAgentUser, is_platform_admin
+from .models import AgentWallet, DepositRequest
+from .serializers import AgentWalletSerializer, DepositRequestSerializer
 
 
 DEFAULT_OPENING_BALANCE = Decimal("124500.00")
@@ -31,3 +31,21 @@ class AgentWalletView(APIView):
     def get(self, request):
         wallet = get_or_create_wallet(request.user)
         return Response(AgentWalletSerializer(wallet).data)
+
+
+class DepositRequestViewSet(viewsets.ModelViewSet):
+    """
+    CRUD for agent deposit / wallet top-up requests.
+    """
+
+    serializer_class = DepositRequestSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if is_platform_admin(user):
+            return DepositRequest.objects.all()
+        return DepositRequest.objects.filter(agent=user)
+
+    def perform_create(self, serializer):
+        serializer.save(agent=self.request.user)
