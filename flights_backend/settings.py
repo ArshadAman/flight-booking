@@ -183,12 +183,20 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
 # CORS Settings
-CORS_ALLOW_ALL_ORIGINS = True # Change in production
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     'https://portion-wiley-events-flow.trycloudflare.com',
     'https://api.occ.services',
+    'https://airline-three-cyan.vercel.app',
+    'https://*.vercel.app',
 ]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
+
 
 
 
