@@ -53,8 +53,8 @@ class GroupTravelAPITests(APITestCase):
         self.assertEqual(response.data['status'], 'NEW_REQUEST')
         self.assertEqual(response.data['pax_adults'], 15)
         
-        # 2. Upload quotes (Admin)
-        self.client.force_authenticate(user=self.admin_user)
+        # 2. Upload quotes (Agent)
+        self.client.force_authenticate(user=self.agent_user)
         quote_url = reverse('group-booking-upload-quote', kwargs={'pk': booking_id})
         quote_data = [
             {
@@ -127,7 +127,15 @@ class GroupTravelAPITests(APITestCase):
         self.assertEqual(booking.status, 'PAID')
         self.assertEqual(booking.total_paid, Decimal('95400.00'))
 
-        # 7. Upload passengers (Agent)
+        # 7. Submit PNR (Agent)
+        pnr_url = reverse('group-booking-submit-pnr', kwargs={'pk': booking_id})
+        response = self.client.post(pnr_url, {'pnr_number': 'PNR12345'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        booking.refresh_from_db()
+        self.assertEqual(booking.status, 'PNR_CREATED')
+        self.assertEqual(booking.pnr_number, 'PNR12345')
+
+        # 8. Upload passengers (Agent)
         passengers_url = reverse('group-booking-upload-passengers', kwargs={'pk': booking_id})
         passenger_list = [
             {
@@ -151,16 +159,15 @@ class GroupTravelAPITests(APITestCase):
         self.assertEqual(booking.status, 'NAME_SUBMITTED')
         self.assertEqual(booking.passengers.count(), 2)
 
-        # 8. Issue ticket (Admin)
+        # 9. Issue ticket (Admin)
         self.client.force_authenticate(user=self.admin_user)
         ticket_url = reverse('group-booking-issue-ticket', kwargs={'pk': booking_id})
         response = self.client.post(ticket_url, {'pnr_number': 'PNR12345'})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         booking.refresh_from_db()
         self.assertEqual(booking.status, 'TICKETED')
-        self.assertEqual(booking.pnr_number, 'PNR12345')
 
-        # 9. Complete Booking (Admin)
+        # 10. Complete Booking (Admin)
         complete_url = reverse('group-booking-complete-booking', kwargs={'pk': booking_id})
         response = self.client.post(complete_url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)

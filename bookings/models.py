@@ -35,6 +35,7 @@ class GroupBooking(BaseModel):
         ('NAME_SUBMITTED', 'Name Submitted'),
         ('TICKETED', 'Ticketed'),
         ('COMPLETED', 'Completed'),
+        ('CANCELLED', 'Cancelled'),
     ]
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='group_bookings')
