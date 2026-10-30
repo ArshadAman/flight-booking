@@ -166,10 +166,17 @@ class ServiceChargeSerializer(serializers.ModelSerializer):
 
 
 class StaffMemberSerializer(serializers.ModelSerializer):
+    agent_id = serializers.UUIDField(source="agent.id", read_only=True)
+    agent_username = serializers.CharField(source="agent.username", read_only=True)
+    agent_email = serializers.EmailField(source="agent.email", read_only=True)
+
     class Meta:
         model = StaffMember
         fields = (
             "id",
+            "agent_id",
+            "agent_username",
+            "agent_email",
             "name",
             "email",
             "phone",

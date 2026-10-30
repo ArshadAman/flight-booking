@@ -221,6 +221,7 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
                 agent_flight_inventory=af,
                 status=Ticket.STATUS_PENDING,
                 booking_ref=booking_ref,
+                booking_channel=Ticket.CHANNEL_B2B,
                 origin=af.origin,
                 destination=af.destination,
                 departure_datetime=af.departure_datetime,

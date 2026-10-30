@@ -198,11 +198,17 @@ class AgentDashboardAPIView(APIView):
         yesterday = today - timedelta(days=1)
         week_start = today - timedelta(days=6)
 
-        inventory_qs = AgentFlightInventory.objects.filter(agent=user)
-        # Prefer inventory-owned bookings for this agent
-        agent_tickets = Ticket.objects.filter(agent_flight_inventory__agent=user).select_related(
-            "user", "agent_flight_inventory"
-        )
+        platform_admin = is_platform_admin(user)
+        if platform_admin:
+            inventory_qs = AgentFlightInventory.objects.all()
+            agent_tickets = Ticket.objects.all().select_related(
+                "user", "agent_flight_inventory", "agent_flight_inventory__agent"
+            )
+        else:
+            inventory_qs = AgentFlightInventory.objects.filter(agent=user)
+            agent_tickets = Ticket.objects.filter(agent_flight_inventory__agent=user).select_related(
+                "user", "agent_flight_inventory"
+            )
 
         def day_bounds(d):
             start = timezone.make_aware(datetime.combine(d, time.min))
@@ -530,12 +536,22 @@ class AgentDashboardAPIView(APIView):
                 "top_airlines": top_airlines,
                 "top_routes": top_routes,
                 "schedule": schedule,
-                "quick_actions": [
-                    {"label": "New Booking", "href": "/sale/flight/all"},
-                    {"label": "Import PNR", "href": "/sale/inventory/new?mode=pnr"},
-                    {"label": "Add Payment", "href": "/sale/profile?tab=update-profile"},
-                    {"label": "Create Agent", "href": "/sale/profile?tab=manage-user&action=create-sub-user"},
-                ],
+                "quick_actions": (
+                    [
+                        {"label": "All Bookings", "href": "/admin/api-bookings"},
+                        {"label": "Group Travel Control", "href": "/admin/group-travel"},
+                        {"label": "Offline Agent Portal", "href": "/sale/dashboard"},
+                        {"label": "Offline Inventory", "href": "/admin/inventory/manage"},
+                        {"label": "Import PNR", "href": "/admin/bookings/pnr"},
+                    ]
+                    if platform_admin
+                    else [
+                        {"label": "New Booking", "href": "/sale/flight/all"},
+                        {"label": "Import PNR", "href": "/sale/inventory/new?mode=pnr"},
+                        {"label": "Add Payment", "href": "/sale/profile?tab=update-profile"},
+                        {"label": "Create Agent", "href": "/sale/profile?tab=manage-user&action=create-sub-user"},
+                    ]
+                ),
             }
         )
 

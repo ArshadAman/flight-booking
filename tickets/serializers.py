@@ -9,6 +9,7 @@ class TicketSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
     passenger_count = serializers.SerializerMethodField()
     is_agent_booking = serializers.SerializerMethodField()
+    agent_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Ticket
@@ -19,6 +20,7 @@ class TicketSerializer(serializers.ModelSerializer):
             'user_name',
             'passenger_count',
             'is_agent_booking',
+            'agent_id',
             'agent_flight_inventory',
             'agent_cancellation_reason',
             'pnr_number',
@@ -58,9 +60,16 @@ class TicketSerializer(serializers.ModelSerializer):
             'user_name',
             'passenger_count',
             'is_agent_booking',
+            'agent_id',
             'created_at',
             'updated_at'
         ]
+
+    def get_agent_id(self, obj):
+        inv = getattr(obj, "agent_flight_inventory", None)
+        if inv is not None and getattr(inv, "agent_id", None):
+            return str(inv.agent_id)
+        return None
 
     def get_user_email(self, obj):
         user = getattr(obj, 'user', None)

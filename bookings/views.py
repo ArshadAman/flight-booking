@@ -14,6 +14,13 @@ from bookings.serializers import (
     GroupServiceCaseSerializer,
 )
 from bookings.state_machine import transition, InvalidTransition
+from accounts.permissions import is_platform_admin
+
+
+def _group_operator(user) -> bool:
+    if is_platform_admin(user):
+        return True
+    return getattr(user, "role", "") in ("AGENT", "ADMIN")
 
 
 class GroupBookingViewSet(viewsets.ModelViewSet):
@@ -22,7 +29,7 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if getattr(user, "role", "") == "ADMIN":
+        if is_platform_admin(user):
             return GroupBooking.objects.all().order_by("-created_at")
 
         if getattr(user, "role", "") == "AGENT":
@@ -42,7 +49,7 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="quote")
     def upload_quote(self, request, pk=None):
         user = request.user
-        if getattr(user, "role", "") not in ("AGENT", "ADMIN"):
+        if not _group_operator(user):
             return Response(
                 {"detail": "Only agents and administrators can upload quotes."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -216,7 +223,7 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="pnr")
     def submit_pnr(self, request, pk=None):
         user = request.user
-        if getattr(user, "role", "") not in ("AGENT", "ADMIN"):
+        if not _group_operator(user):
             return Response(
                 {"detail": "Only agents and administrators can submit PNR."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -334,7 +341,7 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="ticket")
     def issue_ticket(self, request, pk=None):
         user = request.user
-        if getattr(user, "role", "") != "ADMIN":
+        if not is_platform_admin(user):
             return Response(
                 {"detail": "Only administrators can issue tickets."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -375,7 +382,7 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="complete")
     def complete_booking(self, request, pk=None):
         user = request.user
-        if getattr(user, "role", "") != "ADMIN":
+        if not is_platform_admin(user):
             return Response(
                 {"detail": "Only administrators can complete bookings."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -420,7 +427,7 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["patch"], url_path=r"change-request/(?P<cr_id>[^/.]+)/resolve")
     def resolve_change_request(self, request, pk=None, cr_id=None):
         user = request.user
-        if getattr(user, "role", "") != "ADMIN":
+        if not is_platform_admin(user):
             return Response(
                 {"detail": "Only administrators can resolve change requests."},
                 status=status.HTTP_403_FORBIDDEN,

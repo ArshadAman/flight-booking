@@ -1,5 +1,10 @@
 from decimal import Decimal
-from rest_framework import permissions, viewsets
+
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from rest_framework import permissions, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -7,6 +12,7 @@ from accounts.permissions import IsAgentUser, is_platform_admin
 from .models import AgentWallet, DepositRequest
 from .serializers import AgentWalletSerializer, DepositRequestSerializer
 
+User = get_user_model()
 DEFAULT_OPENING_BALANCE = Decimal("124500.00")
 
 def get_or_create_wallet(user):
@@ -35,6 +41,38 @@ class DepositRequestViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(agent=self.request.user)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        deposit = self.get_object()
+        if deposit.status != DepositRequest.STATUS_PENDING:
+            return Response({"detail": "Only pending deposits can be approved."}, status=400)
+        remarks = request.data.get("remarks")
+        with transaction.atomic():
+            if remarks is not None:
+                deposit.remarks = str(remarks)
+            deposit.status = DepositRequest.STATUS_APPROVED
+            deposit.save(update_fields=["status", "remarks", "updated_at"])
+            wallet = get_or_create_wallet(deposit.agent)
+            wallet.balance += deposit.amount
+            wallet.save(update_fields=["balance", "updated_at"])
+        return Response(DepositRequestSerializer(deposit).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        deposit = self.get_object()
+        if deposit.status != DepositRequest.STATUS_PENDING:
+            return Response({"detail": "Only pending deposits can be rejected."}, status=400)
+        remarks = request.data.get("remarks") or "Rejected by admin"
+        deposit.status = DepositRequest.STATUS_REJECTED
+        deposit.remarks = str(remarks)
+        deposit.save(update_fields=["status", "remarks", "updated_at"])
+        return Response(DepositRequestSerializer(deposit).data)
+
 
 class CustomerTransactionsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -144,3 +182,113 @@ class AgentLedgerAPIView(APIView):
             del e["timestamp"]
 
         return Response(entries)
+
+
+class AdminWalletListAPIView(APIView):
+    """GET /api/v1/payments/admin/wallets/ — platform admin view of agent balances."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        wallets = AgentWallet.objects.select_related("agent").order_by("-updated_at")
+        rows = []
+        for wallet in wallets:
+            agent = wallet.agent
+            profile = getattr(agent, "company_profile", None)
+            agency = profile.company_name if profile and profile.company_name else ""
+            full = agent.get_full_name().strip()
+            rows.append(
+                {
+                    "id": str(wallet.id),
+                    "agent_id": str(agent.id),
+                    "agent_name": agency or full or agent.username,
+                    "agent_email": agent.email,
+                    "balance": wallet.balance,
+                    "currency": wallet.currency,
+                    "updated_at": wallet.updated_at,
+                    "is_active": agent.is_active,
+                }
+            )
+        return Response(rows)
+
+
+class PlatformAgentListAPIView(APIView):
+    """GET /api/v1/payments/admin/agents/ — registered travel agents with wallet snapshot."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        agents = User.objects.filter(role=User.AGENT).order_by("-date_joined")
+        rows = []
+        for agent in agents:
+            wallet = AgentWallet.objects.filter(agent=agent).first()
+            profile = getattr(agent, "company_profile", None)
+            agency = profile.company_name if profile and profile.company_name else ""
+            full = agent.get_full_name().strip()
+            last_deposit = (
+                DepositRequest.objects.filter(agent=agent, status=DepositRequest.STATUS_APPROVED)
+                .order_by("-updated_at")
+                .first()
+            )
+            rows.append(
+                {
+                    "id": str(agent.id),
+                    "username": agent.username,
+                    "email": agent.email,
+                    "agency_name": agency or full or agent.username,
+                    "contact_name": full or agent.username,
+                    "balance": str(wallet.balance) if wallet else "0",
+                    "currency": wallet.currency if wallet else "INR",
+                    "is_active": agent.is_active,
+                    "date_joined": agent.date_joined,
+                    "last_deposit_amount": str(last_deposit.amount) if last_deposit else None,
+                    "last_deposit_at": last_deposit.updated_at if last_deposit else None,
+                }
+            )
+        return Response(rows)
+
+
+class PlatformAgentDetailAPIView(APIView):
+    """GET /api/v1/payments/admin/agents/<uuid>/ — single agent profile for admin UI."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, agent_id):
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        agent = get_object_or_404(User, id=agent_id, role=User.AGENT)
+        wallet = AgentWallet.objects.filter(agent=agent).first()
+        profile = getattr(agent, "company_profile", None)
+        agency = profile.company_name if profile and profile.company_name else ""
+        full = agent.get_full_name().strip()
+        return Response(
+            {
+                "id": str(agent.id),
+                "username": agent.username,
+                "email": agent.email,
+                "phone": getattr(agent, "phone_number", "") or "",
+                "agency_name": agency or full or agent.username,
+                "contact_name": full or agent.username,
+                "balance": str(wallet.balance) if wallet else "0",
+                "currency": wallet.currency if wallet else "INR",
+                "is_active": agent.is_active,
+                "date_joined": agent.date_joined,
+                "company_profile": {
+                    "company_name": profile.company_name if profile else "",
+                    "trade_name": profile.trade_name if profile else "",
+                    "gstin": profile.gstin if profile else "",
+                    "pan": profile.pan if profile else "",
+                    "phone": profile.phone if profile else "",
+                    "email": profile.email if profile else agent.email,
+                    "address": profile.address if profile else "",
+                    "city": profile.city if profile else "",
+                    "state": profile.state if profile else "",
+                }
+                if profile
+                else None,
+            }
+        )
