@@ -253,9 +253,13 @@ class AgentDashboardAPIView(APIView):
         if ticketed == 0:
             ticketed = confirmed.count()
 
-        on_hold = InventoryHold.objects.filter(
-            inventory__agent=user, status=InventoryHold.STATUS_HOLD
-        ).count()
+        on_hold = (
+            InventoryHold.objects.filter(status=InventoryHold.STATUS_HOLD).count()
+            if platform_admin
+            else InventoryHold.objects.filter(
+                inventory__agent=user, status=InventoryHold.STATUS_HOLD
+            ).count()
+        )
         waitlist = sum(int(x.waitlist_count or 0) for x in inventory_qs)
         refund_requests = scoped_tickets.filter(status=Ticket.STATUS_CANCELLED).count()
 
@@ -293,7 +297,12 @@ class AgentDashboardAPIView(APIView):
 
         # Recent activities
         activities = []
-        for log in AgentAuditLog.objects.filter(agent=user).order_by("-created_at")[:8]:
+        log_qs = (
+            AgentAuditLog.objects.all()
+            if platform_admin
+            else AgentAuditLog.objects.filter(agent=user)
+        )
+        for log in log_qs.select_related("agent", "performed_by").order_by("-created_at")[:8]:
             activities.append(
                 {
                     "title": log.entry,
@@ -385,18 +394,66 @@ class AgentDashboardAPIView(APIView):
                 }
             )
 
-        # Sub-agents not modeled — expose empty / self listing as "TOP AGENT" for consistency with Figma
-        top_agents = [
-            {
-                "name": (
-                    " ".join(x for x in [user.first_name or "", user.last_name or ""] if x).strip()
-                    or user.username
-                ),
-                "tag": "B2B and B2C",
-                "revenue": _inr_display(revenue),
-                "growth": f"{'+' if _pct_change(today_revenue, y_revenue) >= 0 else ''}{_pct_change(today_revenue, y_revenue)}%",
-            }
-        ]
+        # Sub-agents / platform leaderboard
+        if platform_admin:
+            agent_rows = (
+                confirmed.filter(agent_flight_inventory__isnull=False)
+                .values(
+                    "agent_flight_inventory__agent_id",
+                    "agent_flight_inventory__agent__username",
+                    "agent_flight_inventory__agent__first_name",
+                    "agent_flight_inventory__agent__last_name",
+                )
+                .annotate(revenue_sum=Sum("total_amount"), bookings=Count("id"))
+                .order_by("-revenue_sum")[:5]
+            )
+            top_agents = []
+            for r in agent_rows:
+                aid = r.get("agent_flight_inventory__agent_id")
+                if not aid:
+                    continue
+                name = (
+                    " ".join(
+                        x
+                        for x in [
+                            r.get("agent_flight_inventory__agent__first_name") or "",
+                            r.get("agent_flight_inventory__agent__last_name") or "",
+                        ]
+                        if x
+                    ).strip()
+                    or r.get("agent_flight_inventory__agent__username")
+                    or "Agent"
+                )
+                rev = _money(r.get("revenue_sum"))
+                top_agents.append(
+                    {
+                        "name": name,
+                        "tag": "B2B and B2C",
+                        "revenue": _inr_display(rev),
+                        "growth": f"{int(round((rev / max(revenue, 1)) * 100))}%",
+                    }
+                )
+            if not top_agents:
+                top_agents = [
+                    {
+                        "name": "No agent sales yet",
+                        "tag": "—",
+                        "revenue": _inr_display(0),
+                        "growth": "0%",
+                    }
+                ]
+        else:
+            top_agents = [
+                {
+                    "name": (
+                        " ".join(x for x in [user.first_name or "", user.last_name or ""] if x).strip()
+                        or user.username
+                    ),
+                    "tag": "B2B and B2C",
+                    "revenue": _inr_display(revenue),
+                    "growth": f"{'+' if _pct_change(today_revenue, y_revenue) >= 0 else ''}{_pct_change(today_revenue, y_revenue)}%",
+                }
+            ]
 
         booking_total = total_bookings or 1
         booking_segments = [
@@ -540,7 +597,7 @@ class AgentDashboardAPIView(APIView):
                     [
                         {"label": "All Bookings", "href": "/admin/api-bookings"},
                         {"label": "Group Travel Control", "href": "/admin/group-travel"},
-                        {"label": "Offline Agent Portal", "href": "/sale/dashboard"},
+                        {"label": "Offline Agent Portal", "href": "/admin/offline-portal"},
                         {"label": "Offline Inventory", "href": "/admin/inventory/manage"},
                         {"label": "Import PNR", "href": "/admin/bookings/pnr"},
                     ]

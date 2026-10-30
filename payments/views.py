@@ -215,7 +215,7 @@ class AdminWalletListAPIView(APIView):
 
 
 class PlatformAgentListAPIView(APIView):
-    """GET /api/v1/payments/admin/agents/ — registered travel agents with wallet snapshot."""
+    """GET/POST /api/v1/payments/admin/agents/ — list or create travel agents (platform admin)."""
 
     permission_classes = [permissions.IsAuthenticated]
 
@@ -250,6 +250,34 @@ class PlatformAgentListAPIView(APIView):
                 }
             )
         return Response(rows)
+
+    def post(self, request):
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        from accounts.serializers import AdminCreateAgentSerializer, UserSerializer
+
+        serializer = AdminCreateAgentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        agent = serializer.save()
+        wallet = AgentWallet.objects.filter(agent=agent).first()
+        profile = getattr(agent, "company_profile", None)
+        agency = profile.company_name if profile and profile.company_name else ""
+        full = agent.get_full_name().strip()
+        return Response(
+            {
+                "id": str(agent.id),
+                "username": agent.username,
+                "email": agent.email,
+                "agency_name": agency or full or agent.username,
+                "contact_name": full or agent.username,
+                "balance": str(wallet.balance) if wallet else "0",
+                "currency": wallet.currency if wallet else "INR",
+                "is_active": agent.is_active,
+                "date_joined": agent.date_joined,
+                "user": UserSerializer(agent).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class PlatformAgentDetailAPIView(APIView):
