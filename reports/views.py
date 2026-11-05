@@ -1,14 +1,28 @@
+from django.db.models import Q
 from rest_framework import permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from tickets.models import Ticket
+from accounts.permissions import is_platform_admin
+
+
+def tickets_for_report_user(user):
+    """Same ticket scope as TicketViewSet list for agents."""
+    if is_platform_admin(user):
+        return Ticket.objects.all()
+    if getattr(user, "role", "") == "AGENT":
+        return Ticket.objects.filter(
+            Q(user=user) | Q(agent_flight_inventory__agent=user)
+        )
+    return Ticket.objects.filter(user=user)
+
 
 class BookingReportsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        tickets = Ticket.objects.filter(user=user).order_by("-created_at")[:100]
+        tickets = tickets_for_report_user(user).order_by("-created_at")[:100]
         items = []
         for idx, t in enumerate(tickets):
             dt = t.created_at
@@ -47,7 +61,7 @@ class FinancialReportsAPIView(APIView):
 
     def get(self, request):
         user = request.user
-        tickets = Ticket.objects.filter(user=user).order_by("-created_at")[:100]
+        tickets = tickets_for_report_user(user).order_by("-created_at")[:100]
         items = []
         for idx, t in enumerate(tickets):
             dt = t.created_at
