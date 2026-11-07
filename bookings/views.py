@@ -310,9 +310,14 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="passengers")
     def upload_passengers(self, request, pk=None):
         booking = self.get_object()
-        if booking.status != "PNR_CREATED":
+        if booking.status not in ("PNR_CREATED", "NAME_SUBMITTED"):
             return Response(
-                {"detail": "Passengers can only be uploaded after PNR is created."},
+                {
+                    "detail": (
+                        "Passengers can only be uploaded after PNR is created "
+                        f"(current status: {booking.status})."
+                    )
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -330,10 +335,11 @@ class GroupBookingViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             booking.passengers.all().delete()
             serializer.save(booking=booking)
-            try:
-                transition(booking, "NAME_SUBMITTED")
-            except InvalidTransition as exc:
-                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            if booking.status == "PNR_CREATED":
+                try:
+                    transition(booking, "NAME_SUBMITTED")
+                except InvalidTransition as exc:
+                    return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             booking.save()
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)

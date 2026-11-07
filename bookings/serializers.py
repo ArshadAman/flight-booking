@@ -18,6 +18,10 @@ class GroupQuoteSerializer(serializers.ModelSerializer):
 
 
 class GroupPassengerSerializer(serializers.ModelSerializer):
+    passport_number = serializers.CharField(
+        max_length=50, allow_blank=True, required=False, allow_null=True
+    )
+
     class Meta:
         model = GroupPassenger
         fields = '__all__'
