@@ -1141,9 +1141,13 @@ class TicketRefundClaimE2ETests(APITestCase):
     self.client.force_authenticate(self.admin_user)
     listing = self.client.get(url)
     self.assertEqual(listing.status_code, status.HTTP_200_OK)
-    rows = listing.data.get("data", listing.data)
-    if isinstance(rows, dict) and "results" in rows:
-      rows = rows["results"]
+    raw = listing.data
+    if isinstance(raw, dict):
+      rows = raw.get("data", raw)
+      if isinstance(rows, dict) and "results" in rows:
+        rows = rows["results"]
+    else:
+      rows = raw
     self.assertTrue(any(r.get("claim_id") == payload.get("claim_id") for r in rows))
 
     claim_id = payload.get("id")
