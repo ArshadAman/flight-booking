@@ -227,6 +227,14 @@ class TicketCancellation(BaseModel):
         blank=True,
         related_name="cancellations",
     )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ticket_refund_claims",
+        help_text="Agent or admin user who submitted the refund claim.",
+    )
     claim_id = models.CharField(max_length=40, unique=True, blank=True)
     pnr = models.CharField(max_length=30)
     passenger_name = models.CharField(max_length=120)

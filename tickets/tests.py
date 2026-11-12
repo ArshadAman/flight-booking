@@ -1073,3 +1073,82 @@ class TicketAPITests(APITestCase):
         self.assertEqual(response.data['segments_data'][1]['flight_number'], 'AI 242')
 
 
+class TicketRefundClaimE2ETests(APITestCase):
+  """Agent refund claim is visible to platform admin on cancellations API."""
+
+  def setUp(self):
+    from flights.models import AgentFlightInventory
+
+    self.agent = User.objects.create_user(
+      username="agent_refund_e2e",
+      password="Password123!",
+      role="AGENT",
+    )
+    self.admin_user = User.objects.create_superuser(
+      username="admin_refund_e2e",
+      password="AdminPassword123!",
+      role="ADMIN",
+    )
+    inv = AgentFlightInventory.objects.create(
+      agent=self.agent,
+      airline_code="6E",
+      airline_name="IndiGo",
+      flight_number="6E-100",
+      origin="DEL",
+      destination="BOM",
+      departure_datetime=timezone.now() + timezone.timedelta(days=14),
+      arrival_datetime=timezone.now() + timezone.timedelta(days=14, hours=2),
+      price=Decimal("8000.00"),
+      seats_available=5,
+      is_published=True,
+      is_enabled=True,
+    )
+    self.ticket = Ticket.objects.create(
+      user=self.agent,
+      agent_flight_inventory=inv,
+      pnr_number="REFPNR1",
+      status=Ticket.STATUS_CONFIRMED,
+      origin="DEL",
+      destination="BOM",
+      departure_datetime=inv.departure_datetime,
+      arrival_datetime=inv.arrival_datetime,
+      airline_code="6E",
+      airline_name="IndiGo",
+      flight_number="6E-100",
+      total_amount=Decimal("8000.00"),
+      passengers_data=[{"first_name": "Test", "last_name": "Passenger"}],
+    )
+
+  def test_agent_submit_refund_admin_sees_claim(self):
+    url = reverse("ticket-cancellations-list")
+    self.client.force_authenticate(self.agent)
+    create = self.client.post(
+      url,
+      {
+        "ticket": str(self.ticket.id),
+        "reason": "Passenger illness",
+        "airline_penalty": "5000",
+        "agent_service_fee": "500",
+      },
+      format="json",
+    )
+    self.assertEqual(create.status_code, status.HTTP_201_CREATED, create.data)
+    payload = create.data.get("data", create.data)
+    self.assertEqual(payload.get("status"), "PENDING")
+    self.assertTrue(payload.get("claim_id"))
+    self.assertEqual(payload.get("agent_username"), self.agent.username)
+
+    self.client.force_authenticate(self.admin_user)
+    listing = self.client.get(url)
+    self.assertEqual(listing.status_code, status.HTTP_200_OK)
+    rows = listing.data.get("data", listing.data)
+    if isinstance(rows, dict) and "results" in rows:
+      rows = rows["results"]
+    self.assertTrue(any(r.get("claim_id") == payload.get("claim_id") for r in rows))
+
+    claim_id = payload.get("id")
+    detail_url = reverse("ticket-cancellations-detail", kwargs={"pk": claim_id})
+    patch = self.client.patch(detail_url, {"status": "APPROVED"}, format="json")
+    self.assertEqual(patch.status_code, status.HTTP_200_OK)
+
+

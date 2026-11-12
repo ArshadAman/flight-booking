@@ -280,6 +280,9 @@ class TicketCancelRequestSerializer(serializers.Serializer):
 
 
 class TicketCancellationSerializer(serializers.ModelSerializer):
+    agent_username = serializers.SerializerMethodField()
+    agent_display_name = serializers.SerializerMethodField()
+
     class Meta:
         from .models import TicketCancellation
         model = TicketCancellation
@@ -287,6 +290,9 @@ class TicketCancellationSerializer(serializers.ModelSerializer):
             "id",
             "claim_id",
             "ticket",
+            "requested_by",
+            "agent_username",
+            "agent_display_name",
             "pnr",
             "passenger_name",
             "sector",
@@ -300,7 +306,114 @@ class TicketCancellationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "claim_id", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "claim_id",
+            "requested_by",
+            "agent_username",
+            "agent_display_name",
+            "pnr",
+            "passenger_name",
+            "sector",
+            "travel_date",
+            "fare_paid",
+            "refund_amount",
+            "status",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_agent_username(self, obj):
+        if obj.requested_by_id:
+            return getattr(obj.requested_by, "username", "") or ""
+        inv = getattr(obj.ticket, "agent_flight_inventory", None) if obj.ticket_id else None
+        if inv and inv.agent_id:
+            return getattr(inv.agent, "username", "") or ""
+        return ""
+
+    def get_agent_display_name(self, obj):
+        user = obj.requested_by
+        if user:
+            full = f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip()
+            if full:
+                return full
+            company = getattr(user, "company_name", None)
+            if company:
+                return str(company)
+            return getattr(user, "username", "") or ""
+        return self.get_agent_username(obj) or "—"
+
+    def validate(self, attrs):
+        from .models import TicketCancellation, Ticket
+
+        request = self.context.get("request")
+        ticket = attrs.get("ticket") or getattr(self.instance, "ticket", None)
+        if self.instance is None:
+            if not ticket:
+                raise serializers.ValidationError({"ticket": "Ticket is required for a refund claim."})
+            if ticket.status not in (Ticket.STATUS_CONFIRMED, Ticket.STATUS_PENDING):
+                raise serializers.ValidationError(
+                    {"ticket": "Refund claims are only allowed for confirmed or pending bookings."}
+                )
+            if TicketCancellation.objects.filter(
+                ticket=ticket, status=TicketCancellation.STATUS_PENDING
+            ).exists():
+                raise serializers.ValidationError(
+                    {"ticket": "A pending refund claim already exists for this booking."}
+                )
+            user = getattr(request, "user", None)
+            if user and not getattr(user, "is_staff", False):
+                from accounts.permissions import is_platform_admin
+
+                if not is_platform_admin(user):
+                    can = ticket.user_id == user.id or (
+                        ticket.agent_flight_inventory_id
+                        and ticket.agent_flight_inventory.agent_id == user.id
+                    )
+                    if not can:
+                        raise serializers.ValidationError(
+                            {"ticket": "You do not have permission to request a refund on this booking."}
+                        )
+        return attrs
+
+    def create(self, validated_data):
+        from decimal import Decimal
+        from .models import TicketCancellation
+
+        request = self.context["request"]
+        ticket = validated_data["ticket"]
+        reason = validated_data.get("reason") or ""
+        airline_penalty = validated_data.get("airline_penalty", Decimal("5000"))
+        agent_service_fee = validated_data.get("agent_service_fee", Decimal("500"))
+        fare_paid = Decimal(str(ticket.total_amount or 0))
+        refund_amount = max(Decimal("0"), fare_paid - airline_penalty - agent_service_fee)
+
+        pax = ticket.passengers_data or []
+        primary = pax[0] if isinstance(pax, list) and pax else {}
+        passenger_name = " ".join(
+            str(primary.get(k) or "").strip()
+            for k in ("first_name", "last_name")
+            if primary.get(k)
+        ).strip() or getattr(ticket.user, "username", "Passenger")
+
+        travel_date = None
+        if ticket.departure_datetime:
+            travel_date = ticket.departure_datetime.date()
+
+        return TicketCancellation.objects.create(
+            ticket=ticket,
+            requested_by=request.user,
+            pnr=ticket.pnr_number or "",
+            passenger_name=passenger_name,
+            sector=f"{ticket.origin or ''}-{ticket.destination or ''}".strip("-") or "—",
+            travel_date=travel_date,
+            fare_paid=fare_paid,
+            airline_penalty=airline_penalty,
+            agent_service_fee=agent_service_fee,
+            refund_amount=refund_amount,
+            reason=reason,
+            status=TicketCancellation.STATUS_PENDING,
+        )
 
 
 class TicketAmendmentSerializer(serializers.ModelSerializer):

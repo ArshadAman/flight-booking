@@ -820,7 +820,12 @@ class TicketCancellationViewSet(viewsets.ModelViewSet):
     from .models import TicketCancellation
     from .serializers import TicketCancellationSerializer
 
-    queryset = TicketCancellation.objects.all()
+    queryset = TicketCancellation.objects.select_related(
+        "ticket",
+        "requested_by",
+        "ticket__agent_flight_inventory",
+        "ticket__agent_flight_inventory__agent",
+    ).all()
     serializer_class = TicketCancellationSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -829,8 +834,20 @@ class TicketCancellationViewSet(viewsets.ModelViewSet):
         if is_platform_admin(user):
             return self.queryset.all()
         return self.queryset.filter(
-            models.Q(ticket__user=user) | models.Q(ticket__agent_flight_inventory__agent=user)
+            models.Q(requested_by=user)
+            | models.Q(ticket__user=user)
+            | models.Q(ticket__agent_flight_inventory__agent=user)
         )
+
+    def perform_update(self, serializer):
+        if not is_platform_admin(self.request.user):
+            raise permissions.PermissionDenied("Only platform admins can update refund claim status.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not is_platform_admin(self.request.user):
+            raise permissions.PermissionDenied("Only platform admins can delete refund claims.")
+        instance.delete()
 
 
 class TicketAmendmentViewSet(viewsets.ModelViewSet):

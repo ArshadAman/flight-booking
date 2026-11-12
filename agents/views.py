@@ -261,7 +261,17 @@ class AgentDashboardAPIView(APIView):
             ).count()
         )
         waitlist = sum(int(x.waitlist_count or 0) for x in inventory_qs)
-        refund_requests = scoped_tickets.filter(status=Ticket.STATUS_CANCELLED).count()
+        from tickets.models import TicketCancellation
+
+        if platform_admin:
+            refund_requests = TicketCancellation.objects.filter(
+                status=TicketCancellation.STATUS_PENDING
+            ).count()
+        else:
+            refund_requests = TicketCancellation.objects.filter(
+                requested_by=user,
+                status=TicketCancellation.STATUS_PENDING,
+            ).count()
 
         departures_today = inventory_qs.filter(
             departure_datetime__gte=today_start, departure_datetime__lt=today_end
