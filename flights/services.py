@@ -223,12 +223,9 @@ class ProviderService:
             "SrCitizen_Search": False,
             "StudentFare_Search": student_fare_search,
             "DefenceFare_Search": defence_fare_search,
-            "Filtered_Airline": [
-                {
-                    "Airline_Code": airline_code
-                }
-            ]
         }
+        if airline_code:
+            payload["Filtered_Airline"] = [{"Airline_Code": airline_code}]
 
         # Secure Log: Mask password in log output
         masked_payload = payload.copy()
