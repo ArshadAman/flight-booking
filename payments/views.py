@@ -235,6 +235,9 @@ class PlatformAgentListAPIView(APIView):
                 .order_by("-updated_at")
                 .first()
             )
+            product = _default_api_product_config()
+            if profile and isinstance(profile.api_product_config, dict):
+                product = {**product, **profile.api_product_config}
             rows.append(
                 {
                     "id": str(agent.id),
@@ -248,6 +251,7 @@ class PlatformAgentListAPIView(APIView):
                     "date_joined": agent.date_joined,
                     "last_deposit_amount": str(last_deposit.amount) if last_deposit else None,
                     "last_deposit_at": last_deposit.updated_at if last_deposit else None,
+                    "api_product_config": product,
                 }
             )
         return Response(rows)
@@ -282,7 +286,27 @@ class PlatformAgentListAPIView(APIView):
 
 
 def _default_api_product_config():
-    return {"b2b_api": False, "b2b": True, "b2c": False}
+    return {
+        "b2b_api": False,
+        "b2b": True,
+        "b2c": False,
+        "gds_access": False,
+        "inventory_type": "Offline + GDS",
+        "domestic": True,
+        "international": False,
+        "api_enabled": False,
+    }
+
+
+_PRODUCT_BOOL_KEYS = (
+    "b2b_api",
+    "b2b",
+    "b2c",
+    "gds_access",
+    "domestic",
+    "international",
+    "api_enabled",
+)
 
 
 def _serialize_platform_agent(agent):
@@ -345,9 +369,11 @@ class PlatformAgentDetailAPIView(APIView):
             current = _default_api_product_config()
             if isinstance(profile.api_product_config, dict):
                 current = {**current, **profile.api_product_config}
-            for key in ("b2b_api", "b2b", "b2c"):
+            for key in _PRODUCT_BOOL_KEYS:
                 if key in product_patch:
                     current[key] = bool(product_patch[key])
+            if "inventory_type" in product_patch and isinstance(product_patch["inventory_type"], str):
+                current["inventory_type"] = product_patch["inventory_type"].strip()[:64]
             profile.api_product_config = current
             profile.save(update_fields=["api_product_config", "updated_at"])
         return Response(_serialize_platform_agent(agent))
