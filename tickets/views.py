@@ -12,7 +12,7 @@ from .serializers import (
     TicketAmendmentSerializer,
 )
 from flights.services import ProviderService, ProviderAPIException
-from accounts.permissions import is_platform_admin
+from accounts.permissions import is_platform_admin, is_supplier_user
 
 logger = logging.getLogger('tickets.views')
 
@@ -39,6 +39,9 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             qs = Ticket.objects.select_related('user', 'agent_flight_inventory').filter(
                 Q(user=user) | Q(agent_flight_inventory__agent=user)
             )
+        elif is_supplier_user(user):
+            # Supplier portal: bookings made while logged in as the supplier user (live /tickets/buy/).
+            qs = Ticket.objects.select_related('user', 'agent_flight_inventory').filter(user=user)
         else:
             qs = Ticket.objects.select_related('user', 'agent_flight_inventory').filter(user=user)
 
@@ -865,6 +868,24 @@ class TicketAmendmentViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if is_platform_admin(user):
             return self.queryset.all()
+        from accounts.permissions import is_supplier_user
+
+        if is_supplier_user(user):
+            return self.queryset.all()
         return self.queryset.filter(
             models.Q(ticket__user=user) | models.Q(ticket__agent_flight_inventory__agent=user)
         )
+
+    def create(self, request, *args, **kwargs):
+        from accounts.permissions import is_supplier_user
+
+        if is_supplier_user(request.user) and not is_platform_admin(request.user):
+            raise permissions.PermissionDenied("Suppliers can view managed requests only.")
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        from accounts.permissions import is_supplier_user
+
+        if is_supplier_user(request.user) and not is_platform_admin(request.user):
+            raise permissions.PermissionDenied("Suppliers can view managed requests only.")
+        return super().update(request, *args, **kwargs)

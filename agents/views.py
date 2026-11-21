@@ -66,13 +66,18 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     serializer_class = SupplierSerializer
     permission_classes = [permissions.IsAuthenticated]
-    queryset = Supplier.objects.all()
+    queryset = Supplier.objects.select_related("portal_user")
 
     def get_permissions(self):
-        if self.action in ("me",):
+        if self.action in ("me", "me_apply_action"):
             return [permissions.IsAuthenticated()]
-        if self.action in ("list", "retrieve") and is_supplier_user(self.request.user):
-            return [permissions.IsAuthenticated()]
+        if self.action in ("list", "retrieve", "apply_action"):
+            if is_supplier_user(self.request.user):
+                return [permissions.IsAuthenticated()]
+            if self.action == "apply_action":
+                return [permissions.IsAuthenticated()]
+        if self.action == "bulk_apply_action":
+            return [permissions.IsAuthenticated(), IsAdminUser()]
         return [permissions.IsAuthenticated(), IsAdminUser()]
 
     def get_queryset(self):
@@ -104,6 +109,79 @@ class SupplierViewSet(viewsets.ModelViewSet):
             )
         return Response(SupplierSerializer(supplier).data)
 
+    def _apply_integration_action(self, supplier, *, tab: str, fields: dict, user, bulk: bool = False):
+        cfg = dict(supplier.integration_config or {})
+        history = list(cfg.get("history") or [])
+        entry = {
+            "tab": tab,
+            "fields": fields,
+            "by": getattr(user, "username", ""),
+            "bulk": bulk,
+        }
+        history.append(entry)
+        cfg["latest"] = entry
+        cfg["history"] = history[-50:]
+        if tab:
+            cfg[tab] = fields
+        supplier.integration_config = cfg
+        supplier.save(update_fields=["integration_config", "updated_at"])
+
+    @action(detail=False, methods=["post"], url_path="me/apply-action")
+    def me_apply_action(self, request):
+        """Supplier portal: save Figma action modal (Markup / Discount / etc.)."""
+        if not is_supplier_user(request.user):
+            return Response({"detail": "Supplier only."}, status=status.HTTP_403_FORBIDDEN)
+        supplier = Supplier.objects.filter(portal_user=request.user).first()
+        if not supplier:
+            return Response({"detail": "No supplier profile."}, status=status.HTTP_404_NOT_FOUND)
+        tab = (request.data.get("tab") or "").strip()
+        fields = request.data.get("fields") or {}
+        if not tab:
+            return Response({"detail": "tab is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(fields, dict):
+            return Response({"detail": "fields must be an object."}, status=status.HTTP_400_BAD_REQUEST)
+        self._apply_integration_action(
+            supplier, tab=tab, fields=fields, user=request.user, bulk=bool(request.data.get("bulk"))
+        )
+        return Response(SupplierSerializer(supplier).data)
+
+    @action(detail=True, methods=["post"], url_path="apply-action")
+    def apply_action(self, request, pk=None):
+        supplier = self.get_object()
+        if is_supplier_user(request.user):
+            if supplier.portal_user_id != request.user.id:
+                return Response({"detail": "Forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        elif not is_platform_admin(request.user):
+            return Response({"detail": "Admin or owning supplier only."}, status=status.HTTP_403_FORBIDDEN)
+        tab = (request.data.get("tab") or "").strip()
+        fields = request.data.get("fields") or {}
+        if not tab:
+            return Response({"detail": "tab is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(fields, dict):
+            return Response({"detail": "fields must be an object."}, status=status.HTTP_400_BAD_REQUEST)
+        self._apply_integration_action(
+            supplier, tab=tab, fields=fields, user=request.user, bulk=bool(request.data.get("bulk"))
+        )
+        return Response(SupplierSerializer(supplier).data)
+
+    @action(detail=False, methods=["post"], url_path="bulk-apply-action")
+    def bulk_apply_action(self, request):
+        """Admin: apply same integration action to multiple suppliers."""
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Admin only."}, status=status.HTTP_403_FORBIDDEN)
+        ids = request.data.get("supplier_ids") or []
+        if not isinstance(ids, list) or not ids:
+            return Response({"detail": "supplier_ids required."}, status=status.HTTP_400_BAD_REQUEST)
+        tab = (request.data.get("tab") or "").strip()
+        fields = request.data.get("fields") or {}
+        if not tab:
+            return Response({"detail": "tab is required."}, status=status.HTTP_400_BAD_REQUEST)
+        updated = []
+        for supplier in Supplier.objects.filter(id__in=ids):
+            self._apply_integration_action(supplier, tab=tab, fields=fields, user=request.user, bulk=True)
+            updated.append(supplier.id)
+        return Response({"updated": updated, "count": len(updated)})
+
     @action(detail=True, methods=["post"], url_path="link-portal")
     def link_portal(self, request, pk=None):
         """Admin: attach an existing SUPPLIER-role user to this supplier record."""
@@ -125,6 +203,43 @@ class SupplierViewSet(viewsets.ModelViewSet):
             return Response({"detail": "User is already linked to another supplier."}, status=status.HTTP_400_BAD_REQUEST)
         supplier.portal_user = portal_user
         supplier.save(update_fields=["portal_user", "updated_at"])
+        return Response(SupplierSerializer(supplier).data)
+
+    @action(detail=True, methods=["post"], url_path="create-portal-user")
+    def create_portal_user(self, request, pk=None):
+        """Admin: create a SUPPLIER-role login and link it to this supplier."""
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Admin only."}, status=status.HTTP_403_FORBIDDEN)
+        supplier = self.get_object()
+        from accounts.models import User
+
+        username = (request.data.get("username") or "").strip()
+        password = request.data.get("password") or ""
+        email = (request.data.get("email") or supplier.email or "").strip()
+        if not username or not password:
+            return Response(
+                {"detail": "username and password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if User.objects.filter(username__iexact=username).exists():
+            return Response({"detail": "Username already taken."}, status=status.HTTP_400_BAD_REQUEST)
+        if supplier.portal_user_id:
+            return Response(
+                {"detail": "Supplier already has a portal user. Unlink in Django admin or use link-portal."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = User.objects.create_user(
+            username=username,
+            password=password,
+            email=email or f"{username}@supplier.local",
+            role=User.SUPPLIER,
+        )
+        supplier.portal_user = user
+        update_fields = ["portal_user", "updated_at"]
+        if supplier.status == Supplier.STATUS_PENDING:
+            supplier.status = Supplier.STATUS_APPROVED
+            update_fields.append("status")
+        supplier.save(update_fields=update_fields)
         return Response(SupplierSerializer(supplier).data)
 
     @action(detail=True, methods=["post"])

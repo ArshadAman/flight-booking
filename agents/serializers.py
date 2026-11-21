@@ -56,6 +56,8 @@ class InventoryRestrictionSerializer(serializers.ModelSerializer):
 
 
 class SupplierSerializer(serializers.ModelSerializer):
+    portal_username = serializers.SerializerMethodField()
+
     class Meta:
         model = Supplier
         fields = (
@@ -68,10 +70,17 @@ class SupplierSerializer(serializers.ModelSerializer):
             "status",
             "inventory_count",
             "notes",
+            "integration_config",
+            "portal_username",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "code", "created_at", "updated_at")
+        read_only_fields = ("id", "code", "portal_username", "created_at", "updated_at")
+
+    def get_portal_username(self, obj):
+        if obj.portal_user_id and obj.portal_user:
+            return obj.portal_user.username
+        return None
 
 
 class AgentAuditLogSerializer(serializers.ModelSerializer):
