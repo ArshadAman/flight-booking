@@ -2,12 +2,12 @@ from datetime import datetime, time, timedelta
 
 from django.db.models import Count, Sum, Q
 from django.utils import timezone
-from rest_framework import viewsets, permissions, generics
+from rest_framework import viewsets, permissions, generics, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsAdminUser, IsAgentUser, is_platform_admin
+from accounts.permissions import IsAdminUser, IsAgentUser, is_platform_admin, is_supplier_user
 from .models import (
     InventoryRestriction,
     AgentAuditLog,
@@ -62,14 +62,24 @@ def _inr_display(value: float) -> str:
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
-    """Admin CRUD for inventory suppliers and onboarding requests."""
+    """Admin CRUD for inventory suppliers; suppliers see only their portal profile."""
 
     serializer_class = SupplierSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated]
     queryset = Supplier.objects.all()
+
+    def get_permissions(self):
+        if self.action in ("me",):
+            return [permissions.IsAuthenticated()]
+        if self.action in ("list", "retrieve") and is_supplier_user(self.request.user):
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), IsAdminUser()]
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
+        if is_supplier_user(user):
+            return qs.filter(portal_user=user)
         status = (self.request.query_params.get("status") or "").strip().lower()
         if status in {Supplier.STATUS_PENDING, Supplier.STATUS_APPROVED, Supplier.STATUS_DENIED}:
             qs = qs.filter(status=status)
@@ -77,6 +87,45 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(requested_by=self.request.user)
+
+    @action(detail=False, methods=["get"], url_path="me")
+    def me(self, request):
+        """Supplier portal: profile for the logged-in supplier account."""
+        if not is_supplier_user(request.user) and not is_platform_admin(request.user):
+            return Response({"detail": "Supplier portal access only."}, status=status.HTTP_403_FORBIDDEN)
+        if is_supplier_user(request.user):
+            supplier = Supplier.objects.filter(portal_user=request.user).first()
+        else:
+            supplier = Supplier.objects.filter(portal_user=request.user).first() or Supplier.objects.first()
+        if not supplier:
+            return Response(
+                {"detail": "No supplier profile linked to this account. Ask platform admin to link your login."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(SupplierSerializer(supplier).data)
+
+    @action(detail=True, methods=["post"], url_path="link-portal")
+    def link_portal(self, request, pk=None):
+        """Admin: attach an existing SUPPLIER-role user to this supplier record."""
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Admin only."}, status=status.HTTP_403_FORBIDDEN)
+        supplier = self.get_object()
+        from accounts.models import User
+
+        username = (request.data.get("username") or "").strip()
+        if not username:
+            return Response({"detail": "username is required."}, status=status.HTTP_400_BAD_REQUEST)
+        portal_user = User.objects.filter(username__iexact=username).first()
+        if not portal_user:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        if portal_user.role != User.SUPPLIER:
+            portal_user.role = User.SUPPLIER
+            portal_user.save(update_fields=["role", "updated_at"])
+        if Supplier.objects.filter(portal_user=portal_user).exclude(pk=supplier.pk).exists():
+            return Response({"detail": "User is already linked to another supplier."}, status=status.HTTP_400_BAD_REQUEST)
+        supplier.portal_user = portal_user
+        supplier.save(update_fields=["portal_user", "updated_at"])
+        return Response(SupplierSerializer(supplier).data)
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):

@@ -30,6 +30,14 @@ class Supplier(BaseModel):
         blank=True,
         related_name="supplier_requests",
     )
+    portal_user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="supplier_portal",
+        help_text="Login account for the supplier self-service portal.",
+    )
 
     class Meta:
         ordering = ["-created_at"]

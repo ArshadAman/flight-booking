@@ -7,11 +7,13 @@ class User(AbstractUser):
     CUSTOMER = 'CUSTOMER'
     AGENT = 'AGENT'
     ADMIN = 'ADMIN'
-    
+    SUPPLIER = 'SUPPLIER'
+
     ROLE_CHOICES = [
         (CUSTOMER, 'Customer'),
         (AGENT, 'Agent'),
         (ADMIN, 'Admin'),
+        (SUPPLIER, 'Supplier'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

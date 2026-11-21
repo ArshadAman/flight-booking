@@ -1,6 +1,12 @@
 from rest_framework import permissions
 
 
+def is_supplier_user(user) -> bool:
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    return getattr(user, "role", "") == "SUPPLIER"
+
+
 def is_platform_admin(user) -> bool:
     """True for role=ADMIN, Django staff, or superuser."""
     if not user or not getattr(user, "is_authenticated", False):
@@ -16,6 +22,11 @@ class IsAdminUser(permissions.BasePermission):
     """
     def has_permission(self, request, view):
         return is_platform_admin(request.user)
+
+class IsSupplierUser(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return is_supplier_user(request.user)
+
 
 class IsAgentUser(permissions.BasePermission):
     """
