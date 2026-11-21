@@ -189,6 +189,12 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     'https://portion-wiley-events-flow.trycloudflare.com',
     'https://api.occ.services',
+    'https://www.occ.services',
+    'https://occ.services',
+    'https://superadmin.occ.services',
+    'https://subadmin.occ.services',
+    'https://agent.occ.services',
+    'https://supplier.occ.services',
     'https://airline-three-cyan.vercel.app',
     'https://*.vercel.app',
 ]

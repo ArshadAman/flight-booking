@@ -103,7 +103,12 @@ class PublicForSaleInventoryView(views.APIView):
         if destination:
             ordered = [r for r in ordered if r.destination == destination]
 
-        serializer = PublicForSaleInventorySerializer(ordered, many=True)
+        channel = (request.query_params.get("channel") or "B2B_API").strip().upper()
+        serializer = PublicForSaleInventorySerializer(
+            ordered,
+            many=True,
+            context={"partner_id": partner or None, "channel": channel},
+        )
         return Response({"results": serializer.data, "count": len(serializer.data)})
 
 

@@ -796,11 +796,20 @@ class DiscountViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if is_platform_admin(user):
-            return Discount.objects.all()
-        return Discount.objects.filter(Q(agent=user) | Q(agent__isnull=True))
+            qs = Discount.objects.all()
+        else:
+            qs = Discount.objects.filter(Q(agent=user) | Q(agent__isnull=True))
+        agent = (self.request.query_params.get("agent") or "").strip()
+        if agent and is_platform_admin(user):
+            qs = qs.filter(agent_id=agent)
+        return qs
 
     def perform_create(self, serializer):
-        serializer.save(agent=self.request.user)
+        user = self.request.user
+        if is_platform_admin(user) and self.request.data.get("agent"):
+            serializer.save()
+        else:
+            serializer.save(agent=user)
 
 
 class MarkupRuleViewSet(viewsets.ModelViewSet):
@@ -812,8 +821,13 @@ class MarkupRuleViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if is_platform_admin(user):
-            return MarkupRule.objects.all()
-        return MarkupRule.objects.filter(Q(agent=user) | Q(agent__isnull=True))
+            qs = MarkupRule.objects.all()
+        else:
+            qs = MarkupRule.objects.filter(Q(agent=user) | Q(agent__isnull=True))
+        agent = (self.request.query_params.get("agent") or "").strip()
+        if agent and is_platform_admin(user):
+            qs = qs.filter(agent_id=agent)
+        return qs
 
     def perform_create(self, serializer):
         user = self.request.user

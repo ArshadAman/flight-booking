@@ -469,6 +469,7 @@ class PublicForSaleInventorySerializer(serializers.ModelSerializer):
     search_key = serializers.SerializerMethodField()
     sellable_seats = serializers.IntegerField(read_only=True)
     agent_username = serializers.CharField(source="agent.username", read_only=True)
+    base_price = serializers.SerializerMethodField()
 
     class Meta:
         model = AgentFlightInventory
@@ -482,6 +483,7 @@ class PublicForSaleInventorySerializer(serializers.ModelSerializer):
             "departure_datetime",
             "arrival_datetime",
             "price",
+            "base_price",
             "seats_available",
             "seats_held",
             "waitlist_count",
@@ -502,6 +504,27 @@ class PublicForSaleInventorySerializer(serializers.ModelSerializer):
             "agent",
             "agent_username",
         ]
+
+    def get_base_price(self, obj):
+        return obj.price
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        partner_id = self.context.get("partner_id")
+        if partner_id:
+            from agents.pricing import apply_agent_markup
+
+            channel = self.context.get("channel") or "B2B_API"
+            adjusted = apply_agent_markup(
+                instance.price,
+                agent_id=partner_id,
+                channel=channel,
+                airline=instance.airline_code or "ALL",
+                origin=instance.origin or "",
+                destination=instance.destination or "",
+            )
+            data["price"] = str(adjusted)
+        return data
 
     def get_flight_key(self, obj):
         return f"agent-{obj.id}"

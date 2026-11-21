@@ -14,6 +14,8 @@ from .models import (
     InvoiceSetting,
 )
 
+User = get_user_model()
+
 
 class InventoryRestrictionSerializer(serializers.ModelSerializer):
     agent_username = serializers.CharField(source="agent.username", read_only=True, allow_null=True)
@@ -123,10 +125,17 @@ class AgentCommissionSerializer(serializers.ModelSerializer):
 
 
 class DiscountSerializer(serializers.ModelSerializer):
+    agent = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
     class Meta:
         model = Discount
         fields = (
             "id",
+            "agent",
             "code",
             "title",
             "discount_type",
@@ -140,9 +149,6 @@ class DiscountSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = ("id", "usage_count", "created_at")
-
-
-User = get_user_model()
 
 
 class MarkupRuleSerializer(serializers.ModelSerializer):
