@@ -816,7 +816,11 @@ class MarkupRuleViewSet(viewsets.ModelViewSet):
         return MarkupRule.objects.filter(Q(agent=user) | Q(agent__isnull=True))
 
     def perform_create(self, serializer):
-        serializer.save(agent=self.request.user)
+        user = self.request.user
+        if is_platform_admin(user) and self.request.data.get("agent"):
+            serializer.save()
+        else:
+            serializer.save(agent=user)
 
 
 class ServiceChargeViewSet(viewsets.ModelViewSet):

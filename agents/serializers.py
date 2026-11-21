@@ -1,3 +1,4 @@
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from .models import (
     InventoryRestriction,
@@ -141,11 +142,21 @@ class DiscountSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "usage_count", "created_at")
 
 
+User = get_user_model()
+
+
 class MarkupRuleSerializer(serializers.ModelSerializer):
+    agent = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
     class Meta:
         model = MarkupRule
         fields = (
             "id",
+            "agent",
             "channel",
             "airline",
             "sector",

@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAgentUser, is_platform_admin
+from agents.models import CompanyProfile
 from .models import AgentWallet, DepositRequest
 from .serializers import AgentWalletSerializer, DepositRequestSerializer
 
@@ -280,8 +281,48 @@ class PlatformAgentListAPIView(APIView):
         )
 
 
+def _default_api_product_config():
+    return {"b2b_api": False, "b2b": True, "b2c": False}
+
+
+def _serialize_platform_agent(agent):
+    wallet = AgentWallet.objects.filter(agent=agent).first()
+    profile = getattr(agent, "company_profile", None)
+    agency = profile.company_name if profile and profile.company_name else ""
+    full = agent.get_full_name().strip()
+    product = _default_api_product_config()
+    if profile and isinstance(profile.api_product_config, dict):
+        product = {**product, **profile.api_product_config}
+    return {
+        "id": str(agent.id),
+        "username": agent.username,
+        "email": agent.email,
+        "phone": getattr(agent, "phone_number", "") or "",
+        "agency_name": agency or full or agent.username,
+        "contact_name": full or agent.username,
+        "balance": str(wallet.balance) if wallet else "0",
+        "currency": wallet.currency if wallet else "INR",
+        "is_active": agent.is_active,
+        "date_joined": agent.date_joined,
+        "api_product_config": product,
+        "company_profile": {
+            "company_name": profile.company_name if profile else "",
+            "trade_name": profile.trade_name if profile else "",
+            "gstin": profile.gstin if profile else "",
+            "pan": profile.pan if profile else "",
+            "phone": profile.phone if profile else "",
+            "email": profile.email if profile else agent.email,
+            "address": profile.address if profile else "",
+            "city": profile.city if profile else "",
+            "state": profile.state if profile else "",
+        }
+        if profile
+        else None,
+    }
+
+
 class PlatformAgentDetailAPIView(APIView):
-    """GET /api/v1/payments/admin/agents/<uuid>/ — single agent profile for admin UI."""
+    """GET/PATCH /api/v1/payments/admin/agents/<uuid>/ — agent profile for admin UI."""
 
     permission_classes = [permissions.IsAuthenticated]
 
@@ -289,34 +330,24 @@ class PlatformAgentDetailAPIView(APIView):
         if not is_platform_admin(request.user):
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
         agent = get_object_or_404(User, id=agent_id, role=User.AGENT)
-        wallet = AgentWallet.objects.filter(agent=agent).first()
-        profile = getattr(agent, "company_profile", None)
-        agency = profile.company_name if profile and profile.company_name else ""
-        full = agent.get_full_name().strip()
-        return Response(
-            {
-                "id": str(agent.id),
-                "username": agent.username,
-                "email": agent.email,
-                "phone": getattr(agent, "phone_number", "") or "",
-                "agency_name": agency or full or agent.username,
-                "contact_name": full or agent.username,
-                "balance": str(wallet.balance) if wallet else "0",
-                "currency": wallet.currency if wallet else "INR",
-                "is_active": agent.is_active,
-                "date_joined": agent.date_joined,
-                "company_profile": {
-                    "company_name": profile.company_name if profile else "",
-                    "trade_name": profile.trade_name if profile else "",
-                    "gstin": profile.gstin if profile else "",
-                    "pan": profile.pan if profile else "",
-                    "phone": profile.phone if profile else "",
-                    "email": profile.email if profile else agent.email,
-                    "address": profile.address if profile else "",
-                    "city": profile.city if profile else "",
-                    "state": profile.state if profile else "",
-                }
-                if profile
-                else None,
-            }
-        )
+        return Response(_serialize_platform_agent(agent))
+
+    def patch(self, request, agent_id):
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        agent = get_object_or_404(User, id=agent_id, role=User.AGENT)
+        if "is_active" in request.data:
+            agent.is_active = bool(request.data["is_active"])
+            agent.save(update_fields=["is_active"])
+        product_patch = request.data.get("api_product_config")
+        if isinstance(product_patch, dict):
+            profile, _ = CompanyProfile.objects.get_or_create(agent=agent)
+            current = _default_api_product_config()
+            if isinstance(profile.api_product_config, dict):
+                current = {**current, **profile.api_product_config}
+            for key in ("b2b_api", "b2b", "b2c"):
+                if key in product_patch:
+                    current[key] = bool(product_patch[key])
+            profile.api_product_config = current
+            profile.save(update_fields=["api_product_config", "updated_at"])
+        return Response(_serialize_platform_agent(agent))

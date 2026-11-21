@@ -361,6 +361,11 @@ class CompanyProfile(BaseModel):
     city = models.CharField(max_length=100, blank=True, default="")
     state = models.CharField(max_length=100, blank=True, default="")
     pincode = models.CharField(max_length=10, blank=True, default="")
+    api_product_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="B2B API / B2B / B2C product toggles for distribution admin UI.",
+    )
 
     def __str__(self):
         return f"{self.company_name or self.agent.username} Profile"
