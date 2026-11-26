@@ -40,6 +40,18 @@ class IsAgentUser(permissions.BasePermission):
             return True
         return is_platform_admin(user)
 
+
+class IsOfflineInventoryOwner(permissions.BasePermission):
+    """Agents and suppliers manage their own offline inventory; admins see all."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, "role", "") in ("AGENT", "SUPPLIER"):
+            return True
+        return is_platform_admin(user)
+
 class IsCustomerUser(permissions.BasePermission):
     """
     Allows access only to customer users.

@@ -8,7 +8,7 @@ from rest_framework import views, status, permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiResponse
-from accounts.permissions import IsAgentUser, IsAdminUser, is_platform_admin
+from accounts.permissions import IsOfflineInventoryOwner, IsAdminUser, is_platform_admin
 from .models import AgentFlightInventory, InventoryHold
 from .serializers import (
     FlightSearchRequestSerializer,
@@ -203,7 +203,7 @@ class PassthroughCSVRenderer(BaseRenderer):
 class AgentFlightInventoryViewSet(viewsets.ModelViewSet):
     """ViewSet for agents to manage their pre-purchased flight inventory."""
 
-    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+    permission_classes = [permissions.IsAuthenticated, IsOfflineInventoryOwner]
 
     def get_serializer_class(self):
         if self.action == "create":

@@ -1,6 +1,12 @@
 from rest_framework import generics, status, permissions
 from rest_framework.response import Response
-from .serializers import UserSerializer, RegisterSerializer, AgentRegisterSerializer, CustomTokenObtainPairSerializer
+from .serializers import (
+    UserSerializer,
+    RegisterSerializer,
+    AgentRegisterSerializer,
+    SupplierRegisterSerializer,
+    CustomTokenObtainPairSerializer,
+)
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -24,6 +30,24 @@ class RegisterView(generics.CreateAPIView):
                 "user": user_data,
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SupplierRegisterView(generics.CreateAPIView):
+    queryset = User.objects.all()
+    permission_classes = (permissions.AllowAny,)
+    serializer_class = SupplierRegisterSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {
+                "message": "Registration received. An admin will approve your supplier account before you can sign in.",
+                "supplier_status": "pending",
             },
             status=status.HTTP_201_CREATED,
         )

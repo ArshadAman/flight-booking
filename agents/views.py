@@ -244,9 +244,22 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
+        from accounts.models import User
+
         supplier = self.get_object()
         supplier.status = Supplier.STATUS_APPROVED
-        supplier.save(update_fields=["status", "updated_at"])
+        update_fields = ["status", "updated_at"]
+        if supplier.requested_by_id and not supplier.portal_user_id:
+            user = supplier.requested_by
+            user.is_active = True
+            if user.role != User.SUPPLIER:
+                user.role = User.SUPPLIER
+                user.save(update_fields=["is_active", "role", "updated_at"])
+            else:
+                user.save(update_fields=["is_active", "updated_at"])
+            supplier.portal_user = user
+            update_fields.append("portal_user")
+        supplier.save(update_fields=update_fields)
         return Response(SupplierSerializer(supplier).data)
 
     @action(detail=True, methods=["post"])

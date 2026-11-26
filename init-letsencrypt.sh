@@ -3,7 +3,7 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-domains="api.occ.services"
+domains="api.occ.services www.occ.services occ.services superadmin.occ.services subadmin.occ.services agent.occ.services supplier.occ.services"
 rsa_key_size=4096
 data_path="./data/certbot"
 email="admin@occ.services" # Replace with your email address or leave blank for register-unsafely-without-email

@@ -138,6 +138,61 @@ class AdminCreateAgentSerializer(serializers.Serializer):
         return user
 
 
+class SupplierRegisterSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+    company_name = serializers.CharField(max_length=160, write_only=True)
+
+    class Meta:
+        model = User
+        fields = (
+            "username",
+            "email",
+            "password",
+            "confirm_password",
+            "first_name",
+            "last_name",
+            "phone_number",
+            "company_name",
+        )
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError({"password": "Password fields didn't match."})
+        username = (attrs.get("username") or "").strip()
+        if username and User.objects.filter(username__iexact=username).exists():
+            raise serializers.ValidationError({"username": "This login ID is already taken."})
+        email = (attrs.get("email") or "").strip().lower()
+        if email and User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError({"email": "This email is already registered."})
+        company = (attrs.get("company_name") or "").strip()
+        if not company:
+            raise serializers.ValidationError({"company_name": "Company / supplier name is required."})
+        return attrs
+
+    def create(self, validated_data):
+        company_name = validated_data.pop("company_name", "").strip()
+        validated_data.pop("confirm_password")
+        validated_data["role"] = User.SUPPLIER
+        validated_data["is_active"] = False
+        user = User.objects.create_user(**validated_data)
+        from agents.models import Supplier
+
+        contact = " ".join(
+            p for p in [validated_data.get("first_name"), validated_data.get("last_name")] if p
+        ).strip()
+        Supplier.objects.create(
+            name=company_name or user.username,
+            contact_name=contact or user.username,
+            email=user.email or "",
+            phone=user.phone_number or "",
+            status=Supplier.STATUS_PENDING,
+            requested_by=user,
+            notes="Self-registration — pending admin approval",
+        )
+        return user
+
+
 class AgentRegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
