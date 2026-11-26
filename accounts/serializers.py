@@ -139,22 +139,14 @@ class AdminCreateAgentSerializer(serializers.Serializer):
 
 
 class SupplierRegisterSerializer(serializers.ModelSerializer):
+    """Same field set as AgentRegisterSerializer; creates pending supplier + inactive portal user."""
+
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
-    company_name = serializers.CharField(max_length=160, write_only=True)
 
     class Meta:
         model = User
-        fields = (
-            "username",
-            "email",
-            "password",
-            "confirm_password",
-            "first_name",
-            "last_name",
-            "phone_number",
-            "company_name",
-        )
+        fields = ("username", "email", "password", "confirm_password", "first_name", "last_name", "phone_number")
 
     def validate(self, attrs):
         if attrs["password"] != attrs["confirm_password"]:
@@ -165,24 +157,21 @@ class SupplierRegisterSerializer(serializers.ModelSerializer):
         email = (attrs.get("email") or "").strip().lower()
         if email and User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError({"email": "This email is already registered."})
-        company = (attrs.get("company_name") or "").strip()
-        if not company:
-            raise serializers.ValidationError({"company_name": "Company / supplier name is required."})
         return attrs
 
     def create(self, validated_data):
-        company_name = validated_data.pop("company_name", "").strip()
         validated_data.pop("confirm_password")
+        first = (validated_data.get("first_name") or "").strip()
+        last = (validated_data.get("last_name") or "").strip()
+        contact = " ".join(p for p in [first, last] if p).strip()
         validated_data["role"] = User.SUPPLIER
         validated_data["is_active"] = False
         user = User.objects.create_user(**validated_data)
         from agents.models import Supplier
 
-        contact = " ".join(
-            p for p in [validated_data.get("first_name"), validated_data.get("last_name")] if p
-        ).strip()
+        display_name = contact or user.username
         Supplier.objects.create(
-            name=company_name or user.username,
+            name=display_name,
             contact_name=contact or user.username,
             email=user.email or "",
             phone=user.phone_number or "",
