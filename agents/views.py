@@ -66,7 +66,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     serializer_class = SupplierSerializer
     permission_classes = [permissions.IsAuthenticated]
-    queryset = Supplier.objects.select_related("portal_user")
+    queryset = Supplier.objects.select_related("portal_user", "requested_by")
 
     def get_permissions(self):
         if self.action in ("me", "me_apply_action"):
@@ -267,6 +267,39 @@ class SupplierViewSet(viewsets.ModelViewSet):
         supplier = self.get_object()
         supplier.status = Supplier.STATUS_DENIED
         supplier.save(update_fields=["status", "updated_at"])
+        from accounts.models import User
+
+        for user in (supplier.portal_user, supplier.requested_by):
+            if user:
+                user.is_active = False
+                user.save(update_fields=["is_active", "updated_at"])
+        return Response(SupplierSerializer(supplier).data)
+
+    @action(detail=True, methods=["post"], url_path="set-portal-active")
+    def set_portal_active(self, request, pk=None):
+        """Admin: enable or disable supplier portal login without changing approval status."""
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Admin only."}, status=status.HTTP_403_FORBIDDEN)
+        supplier = self.get_object()
+        if supplier.status != Supplier.STATUS_APPROVED:
+            return Response(
+                {"detail": "Only approved suppliers can be activated or deactivated."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        active = request.data.get("is_active")
+        if active is None:
+            active = request.data.get("active")
+        if active is None:
+            return Response({"detail": "is_active (boolean) is required."}, status=status.HTTP_400_BAD_REQUEST)
+        is_active = bool(active)
+        user = supplier.portal_user or supplier.requested_by
+        if not user:
+            return Response(
+                {"detail": "No portal user linked to this supplier."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.is_active = is_active
+        user.save(update_fields=["is_active", "updated_at"])
         return Response(SupplierSerializer(supplier).data)
 
 

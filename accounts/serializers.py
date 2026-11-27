@@ -170,6 +170,14 @@ class SupplierRegisterSerializer(serializers.ModelSerializer):
         from agents.models import Supplier
 
         display_name = contact or user.username
+        registration = {
+            "username": user.username,
+            "email": user.email or "",
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "phone_number": user.phone_number or "",
+            "submitted_at": user.date_joined.isoformat() if user.date_joined else "",
+        }
         Supplier.objects.create(
             name=display_name,
             contact_name=contact or user.username,
@@ -178,6 +186,7 @@ class SupplierRegisterSerializer(serializers.ModelSerializer):
             status=Supplier.STATUS_PENDING,
             requested_by=user,
             notes="Self-registration — pending admin approval",
+            integration_config={"registration": registration},
         )
         return user
 

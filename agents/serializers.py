@@ -58,8 +58,20 @@ class InventoryRestrictionSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class SupplierRegistrationDetailsSerializer(serializers.Serializer):
+    username = serializers.CharField(read_only=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True)
+    submitted_at = serializers.CharField(read_only=True, required=False, allow_blank=True)
+
+
 class SupplierSerializer(serializers.ModelSerializer):
     portal_username = serializers.SerializerMethodField()
+    portal_is_active = serializers.SerializerMethodField()
+    registration_details = serializers.SerializerMethodField()
+    registration = SupplierRegistrationDetailsSerializer(required=False, write_only=True)
 
     class Meta:
         model = Supplier
@@ -75,15 +87,105 @@ class SupplierSerializer(serializers.ModelSerializer):
             "notes",
             "integration_config",
             "portal_username",
+            "portal_is_active",
+            "registration_details",
+            "registration",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "code", "portal_username", "created_at", "updated_at")
+        read_only_fields = ("id", "code", "portal_username", "portal_is_active", "registration_details", "created_at", "updated_at")
 
     def get_portal_username(self, obj):
         if obj.portal_user_id and obj.portal_user:
             return obj.portal_user.username
         return None
+
+    def get_portal_is_active(self, obj):
+        if obj.portal_user_id and obj.portal_user is not None:
+            return bool(obj.portal_user.is_active)
+        if obj.requested_by_id and obj.requested_by is not None:
+            return bool(obj.requested_by.is_active)
+        return None
+
+    def get_registration_details(self, obj):
+        cfg = (obj.integration_config or {}).get("registration") or {}
+        user = obj.portal_user or obj.requested_by
+        live = {}
+        if user:
+            live = {
+                "username": user.username,
+                "email": user.email or "",
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
+                "phone_number": user.phone_number or "",
+            }
+        merged = {**cfg, **{k: v for k, v in live.items() if v is not None and v != ""}}
+        if not merged.get("submitted_at") and obj.created_at:
+            merged["submitted_at"] = obj.created_at.isoformat()
+        return merged
+
+    def _sync_registration_user(self, instance, reg: dict):
+        if not reg:
+            return
+        user = instance.portal_user or instance.requested_by
+        if not user:
+            return
+        user_fields = {}
+        if "first_name" in reg:
+            user_fields["first_name"] = (reg.get("first_name") or "").strip()
+        if "last_name" in reg:
+            user_fields["last_name"] = (reg.get("last_name") or "").strip()
+        if "phone_number" in reg:
+            user_fields["phone_number"] = (reg.get("phone_number") or "").strip()
+        if "email" in reg and (reg.get("email") or "").strip():
+            user_fields["email"] = (reg.get("email") or "").strip().lower()
+        if user_fields:
+            for k, v in user_fields.items():
+                setattr(user, k, v)
+            user.save(update_fields=[*user_fields.keys(), "updated_at"])
+        if "first_name" in reg or "last_name" in reg:
+            contact = " ".join(
+                p for p in [user.first_name, user.last_name] if p and str(p).strip()
+            ).strip()
+            if contact:
+                instance.contact_name = contact
+        if "email" in reg:
+            instance.email = user_fields.get("email", instance.email)
+        if "phone_number" in reg:
+            instance.phone = user_fields.get("phone_number", instance.phone)
+        cfg = dict(instance.integration_config or {})
+        snapshot = dict(cfg.get("registration") or {})
+        snapshot.update(
+            {
+                "username": user.username,
+                "email": user.email or "",
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
+                "phone_number": user.phone_number or "",
+            }
+        )
+        cfg["registration"] = snapshot
+        instance.integration_config = cfg
+
+    def update(self, instance, validated_data):
+        reg = validated_data.pop("registration", None)
+        instance = super().update(instance, validated_data)
+        request = self.context.get("request")
+        if request and reg is not None:
+            from accounts.permissions import is_platform_admin
+
+            if is_platform_admin(request.user):
+                self._sync_registration_user(instance, reg)
+                instance.save(
+                    update_fields=[
+                        "contact_name",
+                        "email",
+                        "phone",
+                        "integration_config",
+                        "updated_at",
+                    ]
+                )
+        return instance
 
 
 class AgentAuditLogSerializer(serializers.ModelSerializer):
