@@ -93,6 +93,18 @@ class SupplierViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(requested_by=self.request.user)
 
+    @action(detail=False, methods=["post"], url_path="admin-create")
+    def admin_create(self, request):
+        """Admin: full supplier onboard (same fields as add agent) + approved portal login."""
+        if not is_platform_admin(request.user):
+            return Response({"detail": "Admin only."}, status=status.HTTP_403_FORBIDDEN)
+        from accounts.serializers import AdminCreateSupplierSerializer
+
+        serializer = AdminCreateSupplierSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        supplier = serializer.save()
+        return Response(SupplierSerializer(supplier).data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=["get"], url_path="me")
     def me(self, request):
         """Supplier portal: profile for the logged-in supplier account."""

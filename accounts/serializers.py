@@ -138,6 +138,102 @@ class AdminCreateAgentSerializer(serializers.Serializer):
         return user
 
 
+class AdminCreateSupplierSerializer(serializers.Serializer):
+    """Platform admin onboard supplier — same payload shape as AdminCreateAgentSerializer."""
+
+    username = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True, min_length=8)
+    first_name = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
+    phone_number = serializers.CharField(max_length=15, required=False, allow_blank=True, default="")
+    company_name = serializers.CharField(max_length=160, required=False, allow_blank=True, default="")
+    trade_name = serializers.CharField(max_length=160, required=False, allow_blank=True, default="")
+    address = serializers.CharField(required=False, allow_blank=True, default="")
+    gstin = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    pan = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    city = serializers.CharField(max_length=100, required=False, allow_blank=True, default="")
+    state = serializers.CharField(max_length=100, required=False, allow_blank=True, default="")
+    pincode = serializers.CharField(max_length=10, required=False, allow_blank=True, default="")
+    currency = serializers.CharField(max_length=8, required=False, allow_blank=True, default="INR")
+    supplier_channel = serializers.CharField(max_length=32, required=False, allow_blank=True, default="B2B")
+    supplier_class = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
+    aadhar = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    office_phone = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    company_reg_no = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+    operation_center = serializers.CharField(max_length=160, required=False, allow_blank=True, default="")
+    contact_designation = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
+    contact_email = serializers.EmailField(required=False, allow_blank=True, default="")
+    contact_mobile = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    bank_name = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
+    bank_account = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+    branch_name = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
+    ifsc = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    remark = serializers.CharField(required=False, allow_blank=True, default="")
+    country = serializers.CharField(max_length=80, required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError({"password": "Password fields didn't match."})
+        if User.objects.filter(username__iexact=attrs["username"].strip()).exists():
+            raise serializers.ValidationError({"username": "This login ID is already taken."})
+        if User.objects.filter(email__iexact=attrs["email"].strip()).exists():
+            raise serializers.ValidationError({"email": "This email is already registered."})
+        return attrs
+
+    def create(self, validated_data):
+        from agents.models import Supplier
+
+        validated_data.pop("confirm_password")
+        password = validated_data.pop("password")
+        username = validated_data.pop("username").strip()
+        email = validated_data.pop("email").strip().lower()
+        company_name = (validated_data.pop("company_name", "") or "").strip()
+        trade_name = (validated_data.pop("trade_name", "") or "").strip()
+        first_name = validated_data.pop("first_name", "")
+        last_name = validated_data.pop("last_name", "")
+        phone_number = validated_data.pop("phone_number", "")
+
+        extra = {k: validated_data.pop(k, "") for k in list(validated_data.keys())}
+
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            role=User.SUPPLIER,
+            first_name=first_name,
+            last_name=last_name,
+            phone_number=phone_number,
+            is_active=True,
+        )
+        contact = " ".join(p for p in [first_name, last_name] if p and str(p).strip()).strip()
+        display_name = company_name or trade_name or contact or username
+        registration = {
+            "username": username,
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+            "phone_number": phone_number,
+            "submitted_at": user.date_joined.isoformat() if user.date_joined else "",
+        }
+        supplier = Supplier.objects.create(
+            name=display_name,
+            contact_name=contact or username,
+            email=email,
+            phone=phone_number or extra.get("contact_mobile", "") or extra.get("office_phone", ""),
+            status=Supplier.STATUS_APPROVED,
+            portal_user=user,
+            requested_by=user,
+            notes=(extra.get("remark") or "").strip() or "Created by platform admin",
+            integration_config={
+                "registration": registration,
+                "admin_onboard": extra,
+            },
+        )
+        return supplier
+
+
 class SupplierRegisterSerializer(serializers.ModelSerializer):
     """Same field set as AgentRegisterSerializer; creates pending supplier + inactive portal user."""
 
