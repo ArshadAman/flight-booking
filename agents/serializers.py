@@ -71,6 +71,7 @@ class SupplierSerializer(serializers.ModelSerializer):
     portal_username = serializers.SerializerMethodField()
     portal_is_active = serializers.SerializerMethodField()
     registration_details = serializers.SerializerMethodField()
+    inventory_count = serializers.SerializerMethodField()
     registration = SupplierRegistrationDetailsSerializer(required=False, write_only=True)
 
     class Meta:
@@ -93,7 +94,22 @@ class SupplierSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "code", "portal_username", "portal_is_active", "registration_details", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "code",
+            "portal_username",
+            "portal_is_active",
+            "registration_details",
+            "inventory_count",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_inventory_count(self, obj):
+        annotated = getattr(obj, "live_inventory_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return obj.live_inventory_listings_count()
 
     def get_portal_username(self, obj):
         if obj.portal_user_id and obj.portal_user:

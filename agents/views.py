@@ -81,6 +81,10 @@ class SupplierViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated(), IsAdminUser()]
 
     def get_queryset(self):
+        from django.db.models import Count, IntegerField, OuterRef, Subquery
+        from django.db.models.functions import Coalesce
+        from flights.models import AgentFlightInventory
+
         qs = super().get_queryset()
         user = self.request.user
         if is_supplier_user(user):
@@ -88,7 +92,17 @@ class SupplierViewSet(viewsets.ModelViewSet):
         status = (self.request.query_params.get("status") or "").strip().lower()
         if status in {Supplier.STATUS_PENDING, Supplier.STATUS_APPROVED, Supplier.STATUS_DENIED}:
             qs = qs.filter(status=status)
-        return qs
+        owner_id = Coalesce("portal_user_id", "requested_by_id")
+        inv_subq = (
+            AgentFlightInventory.objects.filter(agent_id=OuterRef("owner_id"))
+            .order_by()
+            .values("agent_id")
+            .annotate(c=Count("id"))
+            .values("c")
+        )
+        return qs.annotate(owner_id=owner_id).annotate(
+            live_inventory_count=Coalesce(Subquery(inv_subq[:1], output_field=IntegerField()), 0)
+        )
 
     def perform_create(self, serializer):
         serializer.save(requested_by=self.request.user)

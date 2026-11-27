@@ -55,6 +55,22 @@ class Supplier(BaseModel):
     def __str__(self):
         return f"{self.code} {self.name}"
 
+    def inventory_owner(self):
+        """Portal login that owns offline inventory rows (AgentFlightInventory.agent)."""
+        if self.portal_user_id:
+            return self.portal_user
+        if self.requested_by_id:
+            return self.requested_by
+        return None
+
+    def live_inventory_listings_count(self) -> int:
+        owner = self.inventory_owner()
+        if not owner:
+            return int(self.inventory_count or 0)
+        from flights.models import AgentFlightInventory
+
+        return AgentFlightInventory.objects.filter(agent_id=owner.pk).count()
+
 
 class InventoryRestriction(BaseModel):
     """
