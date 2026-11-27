@@ -108,7 +108,13 @@ class SupplierSerializer(serializers.ModelSerializer):
         return None
 
     def get_registration_details(self, obj):
-        cfg = (obj.integration_config or {}).get("registration") or {}
+        ic = obj.integration_config or {}
+        cfg = dict(ic.get("registration") or {})
+        app = ic.get("application") or ic.get("admin_onboard") or {}
+        if isinstance(app, dict):
+            for k, v in app.items():
+                if v is not None and str(v).strip() and not cfg.get(k):
+                    cfg[k] = v
         user = obj.portal_user or obj.requested_by
         live = {}
         if user:
